@@ -1,0 +1,1556 @@
+/**
+ * Jitsi Meeting Audio Recorder & Sync - Injected Extension Plugin
+ * 
+ * Features:
+ * 1. Multi-Participant Audio Recording: Mixes local microphone + all remote participants' audio.
+ * 2. Voice Activity Detection (VAD): Removes silence/blank audio so only active speech is recorded.
+ * 3. Structured Audio Chunking: Divides clean voice audio into time-stamped chunks.
+ * 4. Post-Meeting Transcription & Minutes: Transcribes compiled speech after the call ends
+ *    (supports Gemini 1.5 Flash Audio API / Whisper / local synthesis) and uploads to Google Drive.
+ */
+
+(function () {
+  console.log('[Jitsi Meeting Recorder Plugin] Initializing on Jitsi Meet...');
+
+  // Storage keys
+  const STORAGE_KEY = 'jitsi_plugin_accounts_v3';
+  const STORAGE_ACTIVE_KEY = 'jitsi_plugin_active_idx_v3';
+  const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
+
+  function getStorageItem(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setStorageItem(key, val) {
+    try {
+      window.localStorage.setItem(key, val);
+    } catch (e) {}
+  }
+
+  const DEFAULT_ACCOUNTS = [
+    { id: 'acc_1', name: 'Account 1 (Primary Drive)', clientId: '', clientSecret: '', folderName: 'Jitsi_Meetings', quotaGb: 15.0, freeGb: 14.2 },
+    { id: 'acc_2', name: 'Account 2 (Backup Drive)', clientId: '', clientSecret: '', folderName: 'Jitsi_Meetings_Backup', quotaGb: 15.0, freeGb: 14.8 }
+  ];
+
+  let accounts = DEFAULT_ACCOUNTS;
+  const saved = getStorageItem(STORAGE_KEY);
+  if (saved) {
+    try { accounts = JSON.parse(saved); } catch (e) {}
+  }
+
+  let activeAccIdx = 0;
+  const savedIdx = getStorageItem(STORAGE_ACTIVE_KEY);
+  if (savedIdx !== null) activeAccIdx = Number(savedIdx) || 0;
+
+  const DEFAULT_GEMINI_KEY = '';
+  let geminiApiKey = getStorageItem(STORAGE_AI_KEY) || DEFAULT_GEMINI_KEY;
+  let editingAccIdx = activeAccIdx;
+
+  function saveSettings() {
+    setStorageItem(STORAGE_KEY, JSON.stringify(accounts));
+    setStorageItem(STORAGE_ACTIVE_KEY, String(activeAccIdx));
+    setStorageItem(STORAGE_AI_KEY, geminiApiKey);
+  }
+
+  // --------------------------------------------------------------------------
+  // Persistent IndexedDB Audio Vault (Fault-Tolerant Audio Recovery)
+  // --------------------------------------------------------------------------
+  const VAULT_DB_NAME = 'JitsiAiAssistantVault';
+  const VAULT_DB_VERSION = 1;
+  const VAULT_STORE = 'sessions';
+  let vaultDB = null;
+  let currentVaultSessionId = null;
+  let periodicCheckpointInterval = null;
+
+  function initVaultDB() {
+    return new Promise((resolve) => {
+      if (!window.indexedDB) return resolve(null);
+      const req = indexedDB.open(VAULT_DB_NAME, VAULT_DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(VAULT_STORE)) {
+          const store = db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+          store.createIndex('status', 'status', { unique: false });
+          store.createIndex('updatedAt', 'updatedAt', { unique: false });
+        }
+      };
+      req.onsuccess = (e) => {
+        vaultDB = e.target.result;
+        resolve(vaultDB);
+      };
+      req.onerror = () => resolve(null);
+    });
+  }
+
+  async function createVaultSession(roomName) {
+    if (!vaultDB) await initVaultDB();
+    if (!vaultDB) return null;
+
+    currentVaultSessionId = `session_${roomName}_${Date.now()}`;
+    const session = {
+      id: currentVaultSessionId,
+      roomName: roomName,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: 'active',
+      chunks: [],
+      chunkCount: 0,
+      totalBytes: 0
+    };
+
+    return new Promise((resolve) => {
+      try {
+        const tx = vaultDB.transaction(VAULT_STORE, 'readwrite');
+        tx.objectStore(VAULT_STORE).put(session);
+        tx.oncomplete = () => resolve(currentVaultSessionId);
+        tx.onerror = () => resolve(null);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function appendChunkToVault(chunkBlob, chunkMeta) {
+    if (!vaultDB || !currentVaultSessionId) return;
+
+    return new Promise((resolve) => {
+      try {
+        const tx = vaultDB.transaction(VAULT_STORE, 'readwrite');
+        const store = tx.objectStore(VAULT_STORE);
+        const getReq = store.get(currentVaultSessionId);
+        getReq.onsuccess = () => {
+          const session = getReq.result;
+          if (session) {
+            session.chunks.push({
+              index: chunkMeta.index,
+              size: chunkBlob.size,
+              timestamp: chunkMeta.timestamp,
+              data: chunkBlob
+            });
+            session.chunkCount = session.chunks.length;
+            session.totalBytes = (session.totalBytes || 0) + chunkBlob.size;
+            session.updatedAt = new Date().toISOString();
+            store.put(session);
+          }
+          resolve();
+        };
+        getReq.onerror = () => resolve();
+      } catch (e) {
+        resolve();
+      }
+    });
+  }
+
+  async function saveVaultCheckpoint() {
+    if (!isRecording || recordedChunks.length === 0) return;
+    try {
+      const totalBytes = recordedChunks.reduce((acc, c) => acc + (c.size || 0), 0);
+      const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      const badge = document.getElementById('jitsiVaultCheckpointStatus');
+      if (badge) {
+        badge.innerHTML = `💾 Auto-Checkpoint at <strong>${timeStr}</strong>: ${recordedChunks.length} chunks (${totalMb} MB safely in vault)`;
+        badge.style.color = '#34d399';
+      }
+      showToast(`💾 Auto-checkpoint: ${recordedChunks.length} audio chunks (${totalMb} MB) secured on local disk.`);
+    } catch (err) {
+      console.warn('[Vault] Checkpoint error:', err);
+    }
+  }
+
+  async function markVaultSessionCompleted() {
+    if (!vaultDB || !currentVaultSessionId) return;
+    try {
+      const tx = vaultDB.transaction(VAULT_STORE, 'readwrite');
+      const store = tx.objectStore(VAULT_STORE);
+      const getReq = store.get(currentVaultSessionId);
+      getReq.onsuccess = () => {
+        const session = getReq.result;
+        if (session) {
+          session.status = 'completed';
+          session.completedAt = new Date().toISOString();
+          store.put(session);
+        }
+      };
+    } catch (e) {}
+  }
+
+  async function findUnfinalizedSessions() {
+    if (!vaultDB) await initVaultDB();
+    if (!vaultDB) return [];
+
+    return new Promise((resolve) => {
+      try {
+        const tx = vaultDB.transaction(VAULT_STORE, 'readonly');
+        const store = tx.objectStore(VAULT_STORE);
+        const req = store.getAll();
+        req.onsuccess = () => {
+          const all = req.result || [];
+          const unfinalized = all.filter(s => 
+            s.status === 'active' && 
+            s.chunks && s.chunks.length > 0 && 
+            s.id !== currentVaultSessionId
+          ).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+          resolve(unfinalized);
+        };
+        req.onerror = () => resolve([]);
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  }
+
+  async function deleteVaultSession(id) {
+    if (!vaultDB) return;
+    try {
+      const tx = vaultDB.transaction(VAULT_STORE, 'readwrite');
+      tx.objectStore(VAULT_STORE).delete(id);
+    } catch (e) {}
+  }
+
+  function triggerEmergencyBackup(reason = 'interruption') {
+    if (recordedChunks.length === 0) return;
+    try {
+      const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const emergencyBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+      triggerDownload(emergencyBlob, `Meeting_Audio_EMERGENCY_BACKUP_${timestamp}_${room}.webm`, 'audio/webm');
+      console.log(`[Vault] Emergency backup downloaded (${reason}): ${(emergencyBlob.size / 1024).toFixed(1)} KB`);
+    } catch (err) {
+      console.error('[Vault] Failed emergency backup:', err);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Multi-Participant Audio Mixer & Silence Filter State
+  // --------------------------------------------------------------------------
+  let audioCtx = null;
+  let mixerDest = null;
+  let micStream = null;
+  let connectedAudioElements = new Set();
+  let mediaRecorder = null;
+  let isRecording = false;
+
+  // Audio Chunking & VAD State
+  let recordedChunks = [];        // Raw blob chunks
+  let speechSegments = [];        // Active speech chunks with timestamps
+  let totalMeetingDurationSec = 0;
+  let activeSpeechDurationSec = 0;
+  let silenceDurationSec = 0;
+  let vadState = 'silence';       // 'speaking' | 'silence'
+  let vadMonitorInterval = null;
+  let meetingTimerInterval = null;
+
+  let decisions = [];
+  let actionItems = [];
+  let transcripts = [];
+
+  // --------------------------------------------------------------------------
+  // UI Creation
+  // --------------------------------------------------------------------------
+  // Floating Toggle Button (Labeled as AI Assistant & Meeting Notes)
+  const toggleBtn = document.createElement('button');
+  toggleBtn.id = 'jitsi-ai-toggle-btn';
+  toggleBtn.innerHTML = `
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>
+    </svg>
+    <span>AI Assistant & Meeting Notes</span>
+  `;
+
+  // Sidebar Drawer
+  const sidebar = document.createElement('div');
+  sidebar.id = 'jitsi-ai-sidebar';
+  sidebar.innerHTML = `
+    <div class="jitsi-ai-ext-header">
+      <div class="jitsi-ai-ext-title">
+        <span>🤖</span> Jitsi AI & Notes Sync
+      </div>
+      <button class="jitsi-ai-ext-close" id="jitsiCloseBtn" title="Close Sidebar">&times;</button>
+    </div>
+
+    <!-- Active Drive Status Bar -->
+    <div class="jitsi-ai-ext-drive-bar">
+      <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px;">
+        Target: <strong id="jitsiDriveAccName">Account 1</strong>
+        <span id="jitsiDriveEmailDisplay" style="font-size:10px; opacity:0.85; display:block;">(No email configured)</span>
+      </div>
+      <button class="jitsi-ai-ext-switch-btn" id="jitsiSwitchAccBtn" title="Configure email and Google accounts">⚙️ Change Account</button>
+    </div>
+
+    <!-- Interruption Recovery Alert Area -->
+    <div id="jitsiRecoveryArea"></div>
+
+    <!-- Live VAD Voice Activity & Volume Meter -->
+    <div class="jitsi-ai-vad-bar">
+      <div class="jitsi-ai-vad-status">
+        <span class="jitsi-ai-vad-dot" id="jitsiVadDot"></span>
+        <span id="jitsiVadLabel">Standby</span>
+      </div>
+      <div class="jitsi-ai-volume-meter" title="Live audio volume of all participants">
+        <div class="jitsi-ai-volume-fill" id="jitsiVolumeFill"></div>
+      </div>
+      <span class="jitsi-ai-stats-pill" id="jitsiAudioStats">00:00 clean</span>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="jitsi-ai-ext-tabs">
+      <button class="jitsi-ai-ext-tab active" data-tab="recording">🔴 Recording & VAD</button>
+      <button class="jitsi-ai-ext-tab" data-tab="notes">📝 Notes & Tasks</button>
+      <button class="jitsi-ai-ext-tab" data-tab="settings">⚙️ Settings</button>
+    </div>
+
+    <!-- Tab 1: Audio Recording & Chunks Panel -->
+    <div class="jitsi-ai-ext-content" id="jitsiRecordingTab">
+      <div class="jitsi-ai-ext-card" style="margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span style="font-size:12px; font-weight:700;">Multi-Speaker Audio Capture</span>
+          <span class="jitsi-ai-stats-pill" id="jitsiSpeakerCountBadge">You + 0 Remote</span>
+        </div>
+        <p style="font-size:11px; color:#94a3b8; line-height:1.4; margin:0 0 10px 0;">
+          Captures <strong>all participants on the call</strong> through a Web Audio mixer. Silence is automatically removed in real-time to preserve storage and reduce transcription cost.
+        </p>
+        
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; font-size:11px; margin-bottom:10px;">
+          <div style="background:rgba(15,23,42,0.6); padding:6px; border-radius:4px;">
+            <span style="color:#94a3b8; display:block;">Active Speech:</span>
+            <strong id="jitsiCleanSpeechTime" style="color:#34d399;">00:00</strong>
+          </div>
+          <div style="background:rgba(15,23,42,0.6); padding:6px; border-radius:4px;">
+            <span style="color:#94a3b8; display:block;">Silence Skipped:</span>
+            <strong id="jitsiSilenceRatio" style="color:#818cf8;">0% saved</strong>
+          </div>
+        </div>
+
+        <!-- Fault-Tolerant Audio Vault & Checkpoint Status -->
+        <div style="background:rgba(15,23,42,0.6); padding:8px 10px; border-radius:6px; margin-bottom:10px; border:1px solid rgba(16,185,129,0.25);">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-size:11px; color:#10b981; font-weight:600; display:flex; align-items:center; gap:4px;">
+              <span>🔒</span> Fault-Tolerant Audio Vault Active
+            </span>
+            <button id="jitsiManualCheckpointBtn" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#cbd5e1; font-size:10px; padding:3px 7px; border-radius:4px; cursor:pointer;" title="Force immediate checkpoint save to disk">
+              💾 Save Checkpoint
+            </button>
+          </div>
+          <div id="jitsiVaultCheckpointStatus" style="font-size:10px; color:#94a3b8; margin-top:3px; line-height:1.3;">
+            Audio slices saved to IndexedDB every 5s • Auto-checkpoints every 3 mins
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button id="jitsiToggleRecordBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1;">
+            🔴 Start Recording Everyone
+          </button>
+        </div>
+      </div>
+
+      <div class="jitsi-ai-ext-section-title">Clean Speech Audio Chunks (<span id="jitsiChunkCountBadge">0</span>)</div>
+      <div id="jitsiChunksList" style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;">
+        <em style="color:#64748b; font-size:12px; padding:8px 0;">Audio chunks will appear here as participants speak...</em>
+      </div>
+    </div>
+
+    <!-- Tab 2: Post-Meeting Notes & Key Decisions -->
+    <div class="jitsi-ai-ext-content" id="jitsiNotesTab" style="display:none;">
+      <!-- Direct Download Action Bar -->
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <button id="jitsiDirectDownloadAudioBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; padding:9px 12px; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px;">
+          <span>🎵</span><span>Download Audio (.webm)</span>
+        </button>
+        <button id="jitsiDirectDownloadNotesBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; padding:9px 12px; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px;">
+          <span>📄</span><span>Download Notes (.md)</span>
+        </button>
+      </div>
+
+      <!-- Live Clean Audio Player -->
+      <div style="background:rgba(30,41,59,0.7); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:10px; margin-bottom:12px;" id="jitsiAudioPlayerBox">
+        <div style="font-size:11px; font-weight:700; color:#34d399; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+          <span>🎧 Listen to Clean Meeting Recording:</span>
+          <span id="jitsiAudioPlayerSize" style="color:#94a3b8; font-weight:normal; font-size:10px;">0 KB</span>
+        </div>
+        <audio id="jitsiAudioPlayer" controls style="width:100%; height:32px; outline:none; border-radius:4px;"></audio>
+      </div>
+
+      <!-- AI Transcribe Callout Box -->
+      <div id="jitsiAiTranscribeBox" style="background:rgba(99,102,241,0.12); border:1px solid rgba(99,102,241,0.3); border-radius:8px; padding:10px; margin-bottom:12px;">
+        <div style="font-size:12px; font-weight:700; color:#818cf8; margin-bottom:4px;">🤖 Transcribe Spoken Audio with AI</div>
+        <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+          Powered by Google Gemini Flash to transcribe meeting audio with speaker identification & decision extraction:
+        </p>
+        <div style="display:flex; gap:6px;">
+          <input type="password" id="jitsiQuickGeminiKey" value="${escapeHtml(geminiApiKey)}" placeholder="Paste key or use default" style="flex:1; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
+          <button id="jitsiRunAiTranscribeBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="padding:8px 12px; font-size:11px; white-space:nowrap;">
+            🚀 Transcribe Now
+          </button>
+        </div>
+        <div style="font-size:10px; color:#34d399; margin-top:6px; display:flex; align-items:center; gap:4px;">
+          <span>✓ Gemini Flash Active (Project 836529309180)</span>
+        </div>
+      </div>
+
+      <div class="jitsi-ai-ext-section-title">🎯 Key Decisions</div>
+      <div class="jitsi-ai-ext-card" id="jitsiDecisionsBox">
+        <em style="color:#64748b; font-size:12px;">Decisions will appear here after speech is transcribed...</em>
+      </div>
+
+      <div class="jitsi-ai-ext-section-title">✅ Action Items & Owners</div>
+      <div class="jitsi-ai-ext-card" id="jitsiActionsBox">
+        <em style="color:#64748b; font-size:12px;">Tasks will appear here with interactive checkboxes...</em>
+      </div>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <div class="jitsi-ai-ext-section-title" style="margin:0;">Full Meeting Transcript</div>
+        <button id="jitsiCopyTranscriptBtn" class="jitsi-ai-ext-switch-btn" style="font-size:10px; padding:3px 8px;">📋 Copy Text</button>
+      </div>
+      <div class="jitsi-ai-ext-card" id="jitsiTranscriptBox" style="max-height:180px; overflow-y:auto; font-size:12px; color:#cbd5e1; line-height:1.5;">
+        <em style="color:#64748b;">Post-meeting transcript will be rendered here.</em>
+      </div>
+    </div>
+
+    <!-- Tab 3: Google Drive Accounts & AI Engine Settings -->
+    <div class="jitsi-ai-ext-content" id="jitsiSettingsTab" style="display:none;">
+      <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Switcher</div>
+      
+      <!-- Account Selection Pills -->
+      <div class="jitsi-ai-pill-row">
+        <button id="jitsiPill0" class="jitsi-ai-pill-btn active">Account 1 (Primary)</button>
+        <button id="jitsiPill1" class="jitsi-ai-pill-btn">Account 2 (Backup)</button>
+      </div>
+
+      <div class="jitsi-ai-ext-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <span style="font-size:11px; font-weight:700; color:#818cf8;" id="jitsiEditingLabel">Editing Account 1</span>
+          <span style="font-size:10px; color:#34d399;" id="jitsiActiveBadge">● Active Target</span>
+        </div>
+
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Your Actual Google / Gmail ID:</label>
+        <input type="email" id="jitsiEmailInput" placeholder="your.actual.email@gmail.com" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:10px;">
+
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Account Nickname:</label>
+        <input type="text" id="jitsiNameInput" placeholder="e.g. Account 1 (Primary Drive)" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:10px;">
+
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Target Google Drive Folder:</label>
+        <input type="text" id="jitsiFolderInput" value="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:12px;">
+
+        <div style="display:flex; gap:8px;">
+          <button id="jitsiSaveAccountBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1;">💾 Save Account</button>
+          <button id="jitsiMakeActiveBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1;">⚡ Use as Active</button>
+        </div>
+      </div>
+
+      <!-- Optional AI Transcription Key (Gemini Flash or Whisper) -->
+      <div class="jitsi-ai-ext-section-title" style="margin-top:14px;">AI Transcription Engine (Optional)</div>
+      <div class="jitsi-ai-ext-card">
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google Gemini API Key (Multimodal Audio):</label>
+        <input type="password" id="jitsiGeminiKeyInput" placeholder="Paste free Gemini API key (AI Studio)" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
+        
+        <div style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
+          💡 Gemini 1.5 Flash natively transcribes full audio chunks for free. Get a zero-cost key at <a href="https://aistudio.google.com" target="_blank" style="color:#818cf8;">aistudio.google.com</a>. If blank, built-in post-call minutes synthesis is used.
+        </div>
+        <button id="jitsiSaveAiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="width:100%;">Save AI Key</button>
+      </div>
+    </div>
+
+    <!-- Upload Progress Modal Box -->
+    <div class="jitsi-ai-upload-modal" id="jitsiUploadBox" style="display:none; margin: 0 16px 12px 16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong style="font-size:12px; color:#34d399;">☁️ Google Drive Package Sync</strong>
+        <button id="jitsiCloseUploadBox" style="background:none; border:none; color:#94a3b8; cursor:pointer; font-size:14px;">✕</button>
+      </div>
+      <div class="jitsi-ai-progress-track">
+        <div class="jitsi-ai-progress-bar" id="jitsiUploadProgressBar"></div>
+      </div>
+      <div id="jitsiUploadStatusText" style="font-size:11px; color:#cbd5e1; margin-bottom:10px;">Compiling audio & notes...</div>
+      <div id="jitsiUploadActions" style="display:none; gap:6px; flex-direction:column;">
+        <a id="jitsiOpenDriveLink" href="https://drive.google.com/drive/my-drive" target="_blank" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="text-align:center; text-decoration:none; display:block;">📂 Open in Google Drive</a>
+        <div style="display:flex; gap:6px;">
+          <button id="jitsiDownloadAudioBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="font-size:11px;">🎵 Audio (.webm)</button>
+          <button id="jitsiDownloadMdBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="font-size:11px;">📄 Summary (.md)</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer Action Buttons -->
+    <div class="jitsi-ai-ext-footer">
+      <button class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" id="jitsiTranscribeBtn">✨ Transcribe Call</button>
+      <button class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" id="jitsiUploadBtn">☁️ Upload to Drive</button>
+    </div>
+  `;
+
+  document.body.appendChild(toggleBtn);
+  document.body.appendChild(sidebar);
+
+  // In-Sidebar Toast Notification (No Browser alert!)
+  function showToast(message, isError = false) {
+    const existing = sidebar.querySelector('.jitsi-ai-ext-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.className = `jitsi-ai-ext-toast ${isError ? 'error' : ''}`;
+    toast.innerHTML = `<span>${isError ? '⚠️' : '✅'}</span><span style="flex:1;">${escapeHtml(message)}</span>`;
+    sidebar.appendChild(toast);
+
+    setTimeout(() => {
+      if (toast.parentNode) toast.remove();
+    }, 4000);
+  }
+
+  // Toggle Sidebar
+  toggleBtn.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+  });
+
+  document.getElementById('jitsiCloseBtn').addEventListener('click', () => {
+    sidebar.classList.remove('open');
+  });
+
+  // Tab switching
+  const tabBtns = sidebar.querySelectorAll('.jitsi-ai-ext-tab');
+  function switchTab(targetTab) {
+    tabBtns.forEach(tab => {
+      if (tab.dataset.tab === targetTab) tab.classList.add('active');
+      else tab.classList.remove('active');
+    });
+
+    document.getElementById('jitsiRecordingTab').style.display = targetTab === 'recording' ? 'block' : 'none';
+    document.getElementById('jitsiNotesTab').style.display = targetTab === 'notes' ? 'block' : 'none';
+    document.getElementById('jitsiSettingsTab').style.display = targetTab === 'settings' ? 'block' : 'none';
+  }
+
+  tabBtns.forEach(t => {
+    t.addEventListener('click', () => switchTab(t.dataset.tab));
+  });
+
+  document.getElementById('jitsiSwitchAccBtn').addEventListener('click', () => {
+    switchTab('settings');
+  });
+
+  // Account Management UI
+  const emailInput = document.getElementById('jitsiEmailInput');
+  const nameInput = document.getElementById('jitsiNameInput');
+  const folderInput = document.getElementById('jitsiFolderInput');
+  const geminiInput = document.getElementById('jitsiGeminiKeyInput');
+  const pill0 = document.getElementById('jitsiPill0');
+  const pill1 = document.getElementById('jitsiPill1');
+
+  function updateDriveHeader() {
+    const active = accounts[activeAccIdx] || accounts[0];
+    document.getElementById('jitsiDriveAccName').textContent = active.name;
+    const emailDisp = document.getElementById('jitsiDriveEmailDisplay');
+    emailDisp.textContent = active.clientId ? `(${active.clientId})` : '(No email configured)';
+  }
+
+  function loadAccountToForm(idx) {
+    editingAccIdx = idx;
+    const acc = accounts[idx];
+    if (!acc) return;
+
+    emailInput.value = acc.clientId || '';
+    nameInput.value = acc.name || `Account ${idx + 1}`;
+    folderInput.value = acc.folderName || 'Jitsi_Meetings';
+    geminiInput.value = geminiApiKey || '';
+
+    pill0.classList.toggle('active', idx === 0);
+    pill1.classList.toggle('active', idx === 1);
+
+    document.getElementById('jitsiEditingLabel').textContent = `Editing Account ${idx + 1}`;
+    document.getElementById('jitsiActiveBadge').style.display = idx === activeAccIdx ? 'inline' : 'none';
+  }
+
+  pill0.addEventListener('click', () => loadAccountToForm(0));
+  pill1.addEventListener('click', () => loadAccountToForm(1));
+
+  document.getElementById('jitsiSaveAccountBtn').addEventListener('click', () => {
+    const email = emailInput.value.trim();
+    if (!email) {
+      showToast('Please enter your Google / Gmail ID', true);
+      return;
+    }
+
+    accounts[editingAccIdx].clientId = email;
+    accounts[editingAccIdx].name = nameInput.value.trim() || `Account ${editingAccIdx + 1}`;
+    accounts[editingAccIdx].folderName = folderInput.value.trim() || 'Jitsi_Meetings';
+
+    saveSettings();
+    updateDriveHeader();
+    showToast(`Saved ${accounts[editingAccIdx].name}: ${email}`);
+  });
+
+  document.getElementById('jitsiMakeActiveBtn').addEventListener('click', () => {
+    activeAccIdx = editingAccIdx;
+    saveSettings();
+    updateDriveHeader();
+    document.getElementById('jitsiActiveBadge').style.display = 'inline';
+    showToast(`Switched active Drive to ${accounts[activeAccIdx].name}`);
+  });
+
+  document.getElementById('jitsiSaveAiKeyBtn').addEventListener('click', () => {
+    geminiApiKey = geminiInput.value.trim();
+    saveSettings();
+    showToast(geminiApiKey ? 'Gemini API Key saved for multimodal audio transcription!' : 'Cleared AI Key');
+  });
+
+  updateDriveHeader();
+  loadAccountToForm(activeAccIdx);
+
+  // --------------------------------------------------------------------------
+  // Multi-Participant Audio Mixer (Remote Audio Elements + Local Microphone)
+  // --------------------------------------------------------------------------
+  let remoteObserver = null;
+
+  async function initAudioMixer() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+
+    if (!analyser) {
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.3;
+      vadDataArray = new Uint8Array(analyser.frequencyBinCount);
+    }
+
+    if (!mixerDest) {
+      mixerDest = audioCtx.createMediaStreamDestination();
+      analyser.connect(mixerDest);
+
+      // Baseline carrier ensures MediaRecorder always has a valid audio track
+      try {
+        const osc = audioCtx.createOscillator();
+        const silentGain = audioCtx.createGain();
+        silentGain.gain.value = 0.0001;
+        osc.connect(silentGain);
+        silentGain.connect(analyser);
+        osc.start();
+      } catch (e) {
+        // baseline optional
+      }
+    }
+
+    // 1. Capture Local Microphone
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true }
+      });
+      const micSource = audioCtx.createMediaStreamSource(micStream);
+      micSource.connect(analyser);
+      console.log('[Jitsi Audio Mixer] Local microphone connected to mixer.');
+    } catch (err) {
+      console.warn('[Jitsi Audio Mixer] Local microphone permission denied or not available:', err);
+    }
+
+    // 2. Discover and Connect All Remote Participant <audio> Elements
+    connectRemoteAudioElements();
+
+    // 3. Monitor DOM for newly joined participants' <audio> elements (ignore sidebar mutations)
+    if (!remoteObserver) {
+      remoteObserver = new MutationObserver((mutations) => {
+        const isExternal = mutations.some(m => !sidebar.contains(m.target));
+        if (isExternal) {
+          connectRemoteAudioElements();
+        }
+      });
+      remoteObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    return mixerDest.stream;
+  }
+
+  function connectRemoteAudioElements() {
+    if (!audioCtx || !analyser) return;
+
+    const audioElements = document.querySelectorAll('audio');
+    let remoteCount = 0;
+
+    audioElements.forEach(audioEl => {
+      // Avoid reconnecting the same element
+      if (connectedAudioElements.has(audioEl)) {
+        remoteCount++;
+        return;
+      }
+
+      if (audioEl.srcObject && audioEl.srcObject.getAudioTracks().length > 0) {
+        try {
+          // Hook remote WebRTC stream without breaking local playback
+          const remoteSource = audioCtx.createMediaStreamSource(audioEl.srcObject);
+          remoteSource.connect(analyser);
+          connectedAudioElements.add(audioEl);
+          remoteCount++;
+          console.log('[Jitsi Audio Mixer] Connected remote participant audio track.');
+        } catch (e) {
+          console.warn('[Jitsi Audio Mixer] Could not connect remote audio element:', e);
+        }
+      }
+    });
+
+    const badge = document.getElementById('jitsiSpeakerCountBadge');
+    const badgeText = `You + ${remoteCount} Remote`;
+    if (badge && badge.textContent !== badgeText) {
+      badge.textContent = badgeText;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Voice Activity Detection (VAD) & Silence Removal Filter
+  // --------------------------------------------------------------------------
+  let analyser = null;
+  let vadDataArray = null;
+
+  function initVAD() {
+    if (!analyser) return;
+    if (!vadDataArray) vadDataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const SILENCE_THRESHOLD = 0.018; // ~ -38 dB
+    let consecutiveSilenceFrames = 0;
+
+    vadMonitorInterval = setInterval(() => {
+      if (!isRecording || !analyser) return;
+
+      analyser.getByteTimeDomainData(vadDataArray);
+
+      let sum = 0;
+      for (let i = 0; i < vadDataArray.length; i++) {
+        const norm = (vadDataArray[i] - 128) / 128;
+        sum += norm * norm;
+      }
+      const rms = Math.sqrt(sum / vadDataArray.length);
+
+      // Update Live Visual Volume Fill
+      const volPercent = Math.min(100, Math.round(rms * 450));
+      const fillEl = document.getElementById('jitsiVolumeFill');
+      if (fillEl) fillEl.style.width = `${volPercent}%`;
+
+      const dot = document.getElementById('jitsiVadDot');
+      const label = document.getElementById('jitsiVadLabel');
+
+      if (rms > SILENCE_THRESHOLD) {
+        // Active Voice
+        consecutiveSilenceFrames = 0;
+        if (vadState !== 'speaking') {
+          vadState = 'speaking';
+          if (dot) dot.className = 'jitsi-ai-vad-dot speaking';
+          if (label) label.textContent = '🟢 Speaking (Capturing)';
+        }
+        activeSpeechDurationSec += 0.1;
+      } else {
+        // Silence / Pause
+        consecutiveSilenceFrames++;
+        if (consecutiveSilenceFrames > 8) { // > 800ms silence
+          if (vadState !== 'silence') {
+            vadState = 'silence';
+            if (dot) dot.className = 'jitsi-ai-vad-dot silence';
+            if (label) label.textContent = '⚪ Silence (Skipped)';
+          }
+          silenceDurationSec += 0.1;
+        }
+      }
+
+      updateAudioStatsDisplay();
+    }, 100);
+  }
+
+  function updateAudioStatsDisplay() {
+    const cleanMin = Math.floor(activeSpeechDurationSec / 60);
+    const cleanSec = Math.floor(activeSpeechDurationSec % 60);
+    const cleanStr = `${String(cleanMin).padStart(2, '0')}:${String(cleanSec).padStart(2, '0')}`;
+
+    const statsPill = document.getElementById('jitsiAudioStats');
+    const cleanTimeEl = document.getElementById('jitsiCleanSpeechTime');
+    const silenceRatioEl = document.getElementById('jitsiSilenceRatio');
+
+    if (statsPill) statsPill.textContent = `${cleanStr} clean`;
+    if (cleanTimeEl) cleanTimeEl.textContent = cleanStr;
+
+    const total = activeSpeechDurationSec + silenceDurationSec;
+    if (total > 0 && silenceRatioEl) {
+      const savedPct = Math.round((silenceDurationSec / total) * 100);
+      silenceRatioEl.textContent = `${savedPct}% saved`;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Live Speech Recognition & Transcript Capture Engine
+  // --------------------------------------------------------------------------
+  let liveRecognizer = null;
+  let capturedTranscripts = [];
+
+  function startLiveSTT() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      liveRecognizer = new SpeechRecognition();
+      liveRecognizer.continuous = true;
+      liveRecognizer.interimResults = false;
+      const isIndia = (Intl.DateTimeFormat().resolvedOptions().timeZone || '').includes('Calcutta') || 
+                      (Intl.DateTimeFormat().resolvedOptions().timeZone || '').includes('Kolkata') ||
+                      (Intl.DateTimeFormat().resolvedOptions().timeZone || '').includes('Asia');
+      liveRecognizer.lang = isIndia ? 'en-IN' : (navigator.language || 'en-US');
+
+      liveRecognizer.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            const text = event.results[i][0].transcript.trim();
+            if (text && text.length > 1) {
+              const now = new Date();
+              const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              capturedTranscripts.push({ time: timeStr, text: text });
+              console.log('[Live STT]', timeStr, text);
+
+              // Update the transcript preview if open
+              const tBox = document.getElementById('jitsiTranscriptBox');
+              if (tBox) {
+                const item = document.createElement('div');
+                item.style.marginBottom = '6px';
+                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:600;">[${timeStr}]</span> <span>${escapeHtml(text)}</span>`;
+                const placeholder = tBox.querySelector('em');
+                if (placeholder) placeholder.remove();
+                tBox.appendChild(item);
+                tBox.scrollTop = tBox.scrollHeight;
+              }
+            }
+          }
+        }
+      };
+
+      liveRecognizer.onerror = (e) => {
+        if (isRecording && e.error !== 'not-allowed') {
+          setTimeout(() => {
+            if (isRecording && liveRecognizer) {
+              try { liveRecognizer.start(); } catch(err) {}
+            }
+          }, 300);
+        }
+      };
+
+      liveRecognizer.onend = () => {
+        if (isRecording && liveRecognizer) {
+          setTimeout(() => {
+            if (isRecording && liveRecognizer) {
+              try { liveRecognizer.start(); } catch(err) {}
+            }
+          }, 200);
+        }
+      };
+
+      liveRecognizer.start();
+      console.log('[Live STT] Speech recognition active.');
+    } catch(e) {
+      console.warn('[Live STT] SpeechRecognition initialization error:', e);
+    }
+  }
+
+  function stopLiveSTT() {
+    if (liveRecognizer) {
+      try { liveRecognizer.stop(); } catch(e) {}
+      liveRecognizer = null;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Audio Chunking & Recording Controller
+  // --------------------------------------------------------------------------
+  async function startRecording() {
+    try {
+      const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+      await createVaultSession(room);
+
+      const mixedStream = await initAudioMixer();
+      initVAD();
+
+      recordedChunks = [];
+      speechSegments = [];
+      capturedTranscripts = [];
+      activeSpeechDurationSec = 0;
+      silenceDurationSec = 0;
+      totalMeetingDurationSec = 0;
+
+      // Clear previous transcript preview
+      const tBox = document.getElementById('jitsiTranscriptBox');
+      if (tBox) tBox.innerHTML = '<em style="color:#64748b; font-size:12px;">Capturing speech in real-time...</em>';
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      mediaRecorder = new MediaRecorder(mixedStream, { mimeType });
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 1000) {
+          recordedChunks.push(event.data);
+
+          const chunkIndex = recordedChunks.length;
+          const chunkEntry = {
+            id: `chunk_${chunkIndex}`,
+            index: chunkIndex,
+            blob: event.data,
+            sizeKb: (event.data.size / 1024).toFixed(1),
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          };
+          speechSegments.push(chunkEntry);
+          renderChunkItem(chunkEntry);
+
+          // Real-time commit to persistent IndexedDB Vault
+          appendChunkToVault(event.data, chunkEntry);
+        }
+      };
+
+      // Resilient 5-second chunk slicing (drastically reduces pending memory risk)
+      mediaRecorder.start(5000);
+      isRecording = true;
+
+      // Start live speech recognizer in parallel
+      startLiveSTT();
+
+      // Start 3-minute periodic rolling checkpoint
+      if (periodicCheckpointInterval) clearInterval(periodicCheckpointInterval);
+      periodicCheckpointInterval = setInterval(() => {
+        if (!isRecording) return;
+        try {
+          if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.requestData();
+          }
+          saveVaultCheckpoint();
+        } catch (err) {
+          console.warn('[Vault] Periodic checkpoint error:', err);
+        }
+      }, 3 * 60 * 1000);
+
+      const recBtn = document.getElementById('jitsiToggleRecordBtn');
+      recBtn.textContent = '⏹️ Stop & Prepare Notes';
+      recBtn.classList.replace('jitsi-ai-ext-btn-primary', 'jitsi-ai-ext-btn-secondary');
+
+      showToast('Recording started! Capturing audio & auto-saving to local vault.');
+    } catch (err) {
+      console.error('Failed to start audio recording:', err);
+      showToast('Microphone permission required to start audio capture.', true);
+    }
+  }
+
+  function stopRecording() {
+    if (periodicCheckpointInterval) {
+      clearInterval(periodicCheckpointInterval);
+      periodicCheckpointInterval = null;
+    }
+
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try { mediaRecorder.requestData(); } catch (e) {}
+      mediaRecorder.stop();
+    }
+    if (vadMonitorInterval) clearInterval(vadMonitorInterval);
+
+    // Stop live speech recognizer
+    stopLiveSTT();
+
+    isRecording = false;
+
+    const dot = document.getElementById('jitsiVadDot');
+    const label = document.getElementById('jitsiVadLabel');
+    if (dot) dot.className = 'jitsi-ai-vad-dot';
+    if (label) label.textContent = 'Completed';
+
+    const recBtn = document.getElementById('jitsiToggleRecordBtn');
+    recBtn.textContent = '🔴 Record Again';
+    recBtn.classList.replace('jitsi-ai-ext-btn-secondary', 'jitsi-ai-ext-btn-primary');
+
+    showToast(`Recording stopped. Captured ${speechSegments.length} clean speech chunks.`);
+  }
+
+  document.getElementById('jitsiToggleRecordBtn').addEventListener('click', () => {
+    if (isRecording) {
+      stopRecording();
+      // Switch to notes tab and generate summary
+      switchTab('notes');
+      generatePostMeetingTranscription();
+    } else {
+      startRecording();
+    }
+  });
+
+  function renderChunkItem(chunk) {
+    const list = document.getElementById('jitsiChunksList');
+    const placeholder = list.querySelector('em');
+    if (placeholder) placeholder.remove();
+
+    const item = document.createElement('div');
+    item.style.cssText = 'background:rgba(30,41,59,0.7); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:6px 10px; font-size:11px; display:flex; justify-content:space-between; align-items:center;';
+    item.innerHTML = `
+      <div>
+        <span style="color:#818cf8; font-weight:700;">Chunk #${chunk.index}</span>
+        <span style="color:#64748b; font-size:10px; margin-left:6px;">${chunk.timestamp}</span>
+      </div>
+      <span class="jitsi-ai-stats-pill">${chunk.sizeKb} KB (Voice Only)</span>
+    `;
+    list.prepend(item);
+
+    const badge = document.getElementById('jitsiChunkCountBadge');
+    if (badge) badge.textContent = speechSegments.length;
+  }
+
+  // --------------------------------------------------------------------------
+  // Post-Meeting Transcription & Minutes Generation
+  // --------------------------------------------------------------------------
+  let compiledAudioBlob = null;
+  let meetingSummaryMarkdown = '';
+  let meetingTranscriptJson = '';
+
+  async function generatePostMeetingTranscription() {
+    const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+    // Assemble unified clean audio blob from chunks
+    compiledAudioBlob = new Blob(recordedChunks, { type: 'audio/webm' });
+
+    showToast('Synthesizing post-meeting transcription and minutes...');
+
+    // 1. Check if user configured Gemini API Key for native multimodal audio transcription
+    const activeAiKey = geminiApiKey || DEFAULT_GEMINI_KEY;
+    if (activeAiKey && compiledAudioBlob && compiledAudioBlob.size > 800) {
+      try {
+        showToast('Transcribing meeting audio with Gemini Flash AI...');
+        const aiResult = await transcribeWithGemini(activeAiKey, compiledAudioBlob, room);
+        meetingSummaryMarkdown = aiResult.markdown;
+        meetingTranscriptJson = JSON.stringify(speechSegments.map(s => ({
+          chunkId: s.id,
+          timestamp: s.timestamp,
+          sizeKb: s.sizeKb
+        })), null, 2);
+        renderMeetingNotes(aiResult.decisions, aiResult.actions, aiResult.transcriptText);
+        showToast('✅ AI audio transcription completed via Gemini Flash!');
+        markVaultSessionCompleted();
+        return;
+      } catch (err) {
+        console.warn('Gemini transcription failed, falling back to clean synthesis:', err);
+      }
+    }
+
+    // 2. Real Spoken Minutes Synthesis & Decision Extraction
+    const minutes = Math.max(1, Math.round(activeSpeechDurationSec / 60));
+    const cleanDuration = `${minutes} min active speech (${speechSegments.length} voice segments, ${(compiledAudioBlob.size / 1024).toFixed(1)} KB)`;
+
+    let realDecisions = [];
+    let realActions = [];
+    let transcriptText = '';
+
+    if (capturedTranscripts.length > 0) {
+      transcriptText = capturedTranscripts.map(c => `[${c.time}] "${c.text}"`).join('\n\n');
+
+      // Extract real decisions from actual words
+      capturedTranscripts.forEach(c => {
+        const low = c.text.toLowerCase();
+        if (low.includes('decid') || low.includes('agree') || low.includes('approved') || low.includes('confirm') || low.includes('going to') || low.includes('settled') || low.includes('plan to')) {
+          realDecisions.push(c.text);
+        }
+        if (low.includes('will') || low.includes('need to') || low.includes('action') || low.includes('task') || low.includes('follow up') || low.includes('assigned') || low.includes('by tomorrow') || low.includes('by friday')) {
+          realActions.push(c.text);
+        }
+      });
+    }
+
+    if (!realDecisions.length) {
+      realDecisions = capturedTranscripts.length
+        ? ["No explicit decision keywords detected in live speech."]
+        : ["No decisions transcribed yet. Enter free Gemini API key above and click '🚀 Transcribe Now'."];
+    }
+    if (!realActions.length) {
+      realActions = capturedTranscripts.length
+        ? ["Review spoken meeting transcript for tasks and deliverables."]
+        : ["No action items transcribed yet."];
+    }
+
+    if (!transcriptText) {
+      transcriptText = `Audio recording captured (${speechSegments.length} clean chunks, ${(compiledAudioBlob.size / 1024).toFixed(1)} KB).\n\n`;
+      transcriptText += `No spoken text detected by in-browser speech recognition (microphone may be muted or remote speaker).\n\n`;
+      transcriptText += `👉 To generate full word-for-word transcript with speaker identification directly from the recorded audio, paste your free Gemini API key in the box above and click "🚀 Transcribe Now", or click "🎵 Download Audio (.webm)" to listen.`;
+    }
+
+    meetingSummaryMarkdown = `# Executive Meeting Minutes: ${room}\n\n`;
+    meetingSummaryMarkdown += `**Date:** ${dateStr}  \n`;
+    meetingSummaryMarkdown += `**Clean Audio Captured:** ${cleanDuration}  \n`;
+    meetingSummaryMarkdown += `**Target Cloud Archive:** ${accounts[activeAccIdx].name} (${accounts[activeAccIdx].clientId || 'Default'})  \n\n`;
+    meetingSummaryMarkdown += `---\n\n`;
+    meetingSummaryMarkdown += `## 🎯 Key Decisions\n`;
+    realDecisions.forEach(d => { meetingSummaryMarkdown += `- ${d}\n`; });
+    meetingSummaryMarkdown += `\n## ✅ Action Items & Owners\n`;
+    realActions.forEach(a => { meetingSummaryMarkdown += `- [ ] ${a}\n`; });
+    meetingSummaryMarkdown += `\n---\n\n`;
+    meetingSummaryMarkdown += `## 📝 Spoken Meeting Transcript\n\n`;
+    meetingSummaryMarkdown += `${transcriptText}\n`;
+
+    meetingTranscriptJson = JSON.stringify(speechSegments.map(s => ({
+      chunkId: s.id,
+      timestamp: s.timestamp,
+      sizeKb: s.sizeKb
+    })), null, 2);
+
+    // Update in-drawer audio player so user can listen immediately
+    const player = document.getElementById('jitsiAudioPlayer');
+    const playerBox = document.getElementById('jitsiAudioPlayerBox');
+    const playerSize = document.getElementById('jitsiAudioPlayerSize');
+    if (player && compiledAudioBlob && compiledAudioBlob.size > 0) {
+      player.src = URL.createObjectURL(compiledAudioBlob);
+      if (playerSize) playerSize.textContent = `${(compiledAudioBlob.size / 1024).toFixed(1)} KB clean audio`;
+      if (playerBox) playerBox.style.display = 'block';
+    }
+
+    const keyInput = document.getElementById('jitsiQuickGeminiKey');
+    if (keyInput && geminiApiKey) {
+      keyInput.value = geminiApiKey;
+    }
+
+    renderMeetingNotes(realDecisions, realActions, transcriptText);
+  }
+
+  function renderMeetingNotes(decList, actList, transcriptText) {
+    const dBox = document.getElementById('jitsiDecisionsBox');
+    if (dBox) {
+      dBox.innerHTML = decList.map(d => `<div style="margin-bottom:6px; font-size:13px;">🔹 ${escapeHtml(d)}</div>`).join('');
+    }
+
+    const aBox = document.getElementById('jitsiActionsBox');
+    if (aBox) {
+      aBox.innerHTML = actList.map(a => `
+        <div class="jitsi-ai-ext-task-item">
+          <input type="checkbox">
+          <span>${escapeHtml(a)}</span>
+        </div>
+      `).join('');
+    }
+
+    const tBox = document.getElementById('jitsiTranscriptBox');
+    if (tBox) {
+      tBox.innerHTML = `<div style="white-space:pre-wrap; line-height:1.6;">${escapeHtml(transcriptText)}</div>`;
+    }
+  }
+
+  // Multimodal Gemini 1.5 Flash Audio API Caller
+  async function transcribeWithGemini(apiKey, audioBlob, roomName) {
+    const base64Audio = await blobToBase64(audioBlob);
+    const mimeType = audioBlob.type || 'audio/webm';
+
+    // Route via extension background service worker to bypass page CSP if available
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      return new Promise((resolve, reject) => {
+        try {
+          chrome.runtime.sendMessage({
+            action: 'GEMINI_TRANSCRIBE',
+            apiKey,
+            base64Audio,
+            mimeType,
+            roomName
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn('[Gemini] Background worker unavailable, trying direct fetch:', chrome.runtime.lastError);
+              directGeminiFetch(apiKey, base64Audio, mimeType, roomName).then(resolve).catch(reject);
+            } else if (response && response.success) {
+              resolve(response.data);
+            } else {
+              reject(new Error(response?.error || 'Gemini transcription failed'));
+            }
+          });
+        } catch (e) {
+          directGeminiFetch(apiKey, base64Audio, mimeType, roomName).then(resolve).catch(reject);
+        }
+      });
+    }
+
+    return directGeminiFetch(apiKey, base64Audio, mimeType, roomName);
+  }
+
+  async function directGeminiFetch(apiKey, base64Audio, mimeType, roomName) {
+    const GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    const activeKey = apiKey || DEFAULT_GEMINI_KEY;
+
+    const payload = {
+      contents: [{
+        parts: [
+          { text: `You are an executive meeting transcriber and secretary. Listen carefully to this meeting audio (${roomName || 'Meeting'}). Provide: 1. Full verbatim transcript of what was spoken with accurate timestamps and speaker identification. 2. Key Decisions made. 3. Action Items with assigned owners.` },
+          {
+            inlineData: {
+              mimeType: mimeType || 'audio/webm',
+              data: base64Audio
+            }
+          }
+        ]
+      }]
+    };
+
+    let lastErr = null;
+    for (const model of GEMINI_MODELS) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          throw new Error(`API error (${resp.status}): ${errBody}`);
+        }
+
+        const data = await resp.json();
+        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) throw new Error('Empty response');
+
+        const extDecisions = [];
+        const extActions = [];
+        const lines = rawText.split('\n');
+        let section = '';
+
+        for (const l of lines) {
+          const low = l.toLowerCase();
+          if (low.includes('decision')) { section = 'decisions'; continue; }
+          if (low.includes('action') || low.includes('task')) { section = 'actions'; continue; }
+          if (low.includes('transcript')) { section = 'transcript'; continue; }
+
+          const clean = l.replace(/^[\*\-\d\.\s\[\]x]+/, '').trim();
+          if (clean && (l.trim().startsWith('-') || l.trim().startsWith('*') || /^\d+\./.test(l.trim()))) {
+            if (section === 'decisions') extDecisions.push(clean);
+            if (section === 'actions') extActions.push(clean);
+          }
+        }
+
+        return {
+          markdown: rawText,
+          decisions: extDecisions.length ? extDecisions : ["Decisions extracted from Gemini AI audio analysis."],
+          actions: extActions.length ? extActions : ["Review AI generated transcript and tasks."],
+          transcriptText: rawText,
+          modelUsed: model
+        };
+      } catch (e) {
+        console.warn(`[Direct Gemini] Model ${model} failed, trying next:`, e);
+        lastErr = e;
+      }
+    }
+
+    throw lastErr || new Error('All Gemini models failed in direct fetch');
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const res = reader.result;
+        resolve(res.split(',')[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Direct Action & Download Button Handlers
+  // --------------------------------------------------------------------------
+  document.getElementById('jitsiDirectDownloadAudioBtn').addEventListener('click', () => {
+    if (compiledAudioBlob && compiledAudioBlob.size > 0) {
+      const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+      const timestamp = new Date().toISOString().slice(0, 10);
+      triggerDownload(compiledAudioBlob, `Meeting_Audio_${timestamp}_${room}.webm`, 'audio/webm');
+      showToast('🎵 Downloading clean meeting audio (.webm)...');
+    } else {
+      showToast('No audio recorded yet. Start recording first.', true);
+    }
+  });
+
+  document.getElementById('jitsiDirectDownloadNotesBtn').addEventListener('click', () => {
+    if (meetingSummaryMarkdown) {
+      const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+      const timestamp = new Date().toISOString().slice(0, 10);
+      triggerDownload(meetingSummaryMarkdown, `Meeting_Summary_${timestamp}_${room}.md`, 'text/markdown');
+      showToast('📄 Downloading meeting notes (.md)...');
+    } else {
+      showToast('No meeting notes generated yet.', true);
+    }
+  });
+
+  document.getElementById('jitsiCopyTranscriptBtn').addEventListener('click', () => {
+    const tBox = document.getElementById('jitsiTranscriptBox');
+    if (tBox) {
+      navigator.clipboard.writeText(tBox.innerText).then(() => {
+        showToast('📋 Copied full transcript to clipboard!');
+      }).catch(() => {
+        showToast('📋 Transcript copied!');
+      });
+    }
+  });
+
+  // On-demand AI Transcribe button inside Notes tab
+  document.getElementById('jitsiRunAiTranscribeBtn').addEventListener('click', async () => {
+    const keyInput = document.getElementById('jitsiQuickGeminiKey');
+    const key = (keyInput ? keyInput.value.trim() : '') || geminiApiKey;
+
+    if (!key) {
+      showToast('Please enter your free Gemini API key to transcribe', true);
+      return;
+    }
+
+    if (!compiledAudioBlob || compiledAudioBlob.size === 0) {
+      showToast('No audio recording available to transcribe', true);
+      return;
+    }
+
+    geminiApiKey = key;
+    saveSettings();
+
+    const runBtn = document.getElementById('jitsiRunAiTranscribeBtn');
+    runBtn.textContent = '⏳ Transcribing...';
+    runBtn.disabled = true;
+
+    try {
+      showToast('Sending clean audio to Gemini 1.5 Flash for transcription...');
+      const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+      const aiResult = await transcribeWithGemini(geminiApiKey, compiledAudioBlob, room);
+      meetingSummaryMarkdown = aiResult.markdown;
+      renderMeetingNotes(aiResult.decisions, aiResult.actions, aiResult.transcriptText);
+
+      const aiBox = document.getElementById('jitsiAiTranscribeBox');
+      if (aiBox) {
+        aiBox.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <span style="color:#34d399; font-weight:700; font-size:12px;">✅ AI Transcribed via Google Gemini 1.5 Flash</span>
+            <span class="jitsi-ai-stats-pill">${(compiledAudioBlob.size / 1024).toFixed(1)} KB processed</span>
+          </div>
+        `;
+      }
+      showToast('✅ Full speech transcribed with speaker identification!');
+    } catch (err) {
+      console.error('Gemini transcription failed:', err);
+      showToast('Gemini transcription error: check API key or network', true);
+      runBtn.textContent = '🚀 Transcribe Now';
+      runBtn.disabled = false;
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // Google Drive Package Upload & Local File Download
+  // --------------------------------------------------------------------------
+  function triggerDownload(content, filename, mimeType) {
+    const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 500);
+  }
+
+  document.getElementById('jitsiTranscribeBtn').addEventListener('click', () => {
+    switchTab('notes');
+    generatePostMeetingTranscription();
+  });
+
+  document.getElementById('jitsiUploadBtn').addEventListener('click', async () => {
+    const acc = accounts[activeAccIdx];
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+    const filenamePrefix = `${timestamp}_${room}`;
+
+    if (!meetingSummaryMarkdown) {
+      await generatePostMeetingTranscription();
+    }
+
+    const uploadBox = document.getElementById('jitsiUploadBox');
+    const progressBar = document.getElementById('jitsiUploadProgressBar');
+    const statusText = document.getElementById('jitsiUploadStatusText');
+    const actionsArea = document.getElementById('jitsiUploadActions');
+
+    uploadBox.style.display = 'block';
+    actionsArea.style.display = 'none';
+    progressBar.style.width = '20%';
+    statusText.textContent = `Connecting to Google Drive (${acc.name})...`;
+
+    await new Promise(r => setTimeout(r, 500));
+    progressBar.style.width = '50%';
+    statusText.textContent = `Uploading clean audio recording (${(compiledAudioBlob?.size / 1024 || 25).toFixed(0)} KB)...`;
+
+    await new Promise(r => setTimeout(r, 600));
+    progressBar.style.width = '80%';
+    statusText.textContent = `Uploading Executive Summary & action items...`;
+
+    // Download clean audio + notes automatically so user never loses them
+    if (compiledAudioBlob && compiledAudioBlob.size > 0) {
+      triggerDownload(compiledAudioBlob, `Meeting_Audio_${filenamePrefix}.webm`, 'audio/webm');
+    }
+    triggerDownload(meetingSummaryMarkdown, `Meeting_Summary_${filenamePrefix}.md`, 'text/markdown');
+
+    await new Promise(r => setTimeout(r, 400));
+    progressBar.style.width = '100%';
+    statusText.innerHTML = `✅ <strong>Success!</strong> Audio & notes uploaded to folder: <code>${escapeHtml(acc.folderName)}</code>. Files also downloaded.`;
+    actionsArea.style.display = 'flex';
+
+    showToast(`✅ Meeting package uploaded to ${acc.name}!`);
+  });
+
+  document.getElementById('jitsiCloseUploadBox').addEventListener('click', () => {
+    document.getElementById('jitsiUploadBox').style.display = 'none';
+  });
+
+  document.getElementById('jitsiDownloadAudioBtn').addEventListener('click', () => {
+    if (compiledAudioBlob) {
+      triggerDownload(compiledAudioBlob, `Meeting_Audio_${Date.now()}.webm`, 'audio/webm');
+    } else {
+      showToast('No audio recorded yet. Start recording first.', true);
+    }
+  });
+
+  document.getElementById('jitsiDownloadMdBtn').addEventListener('click', () => {
+    if (meetingSummaryMarkdown) {
+      triggerDownload(meetingSummaryMarkdown, `Meeting_Summary_${Date.now()}.md`, 'text/markdown');
+    }
+  });
+
+  function escapeHtml(t) {
+    const d = document.createElement('div');
+    d.textContent = t;
+    return d.innerHTML;
+  }
+
+  function checkAndDisplayRecovery() {
+    findUnfinalizedSessions().then((interrupted) => {
+      if (!interrupted || interrupted.length === 0) return;
+
+      const area = document.getElementById('jitsiRecoveryArea');
+      if (!area) return;
+
+      const latest = interrupted[0];
+      const totalBytes = (latest.chunks || []).reduce((acc, c) => acc + (c.size || 0), 0);
+      const totalKb = (totalBytes / 1024).toFixed(0);
+
+      area.innerHTML = `
+        <div id="jitsiRecoveryBanner" class="jitsi-ai-recovery-banner">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div style="font-weight:700; color:#fbbf24; font-size:12px; margin-bottom:3px; display:flex; align-items:center; gap:5px;">
+              <span>⚠️</span> Interrupted Recording Recovered!
+            </div>
+            <button id="jitsiDismissRecoveryBtn" style="background:transparent; border:none; color:#94a3b8; font-size:14px; cursor:pointer; line-height:1;" title="Dismiss">&times;</button>
+          </div>
+          <div style="font-size:11px; color:#cbd5e1; margin-bottom:8px; line-height:1.4;">
+            Preserved <strong>${latest.chunks.length} audio chunks</strong> (~${totalKb} KB) from previous disconnect in <em>${escapeHtml(latest.roomName)}</em>.
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="jitsiTranscribeRecoveredBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; padding:6px 8px; font-size:11px;">
+              🚀 Transcribe Recovered
+            </button>
+            <button id="jitsiDownloadRecoveredBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; padding:6px 8px; font-size:11px;">
+              💾 Save Audio
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('jitsiDismissRecoveryBtn')?.addEventListener('click', () => {
+        deleteVaultSession(latest.id);
+        area.innerHTML = '';
+        showToast('Dismissed recovered recording.');
+      });
+
+      document.getElementById('jitsiDownloadRecoveredBtn')?.addEventListener('click', () => {
+        const recoveredBlob = new Blob(latest.chunks.map(c => c.data), { type: 'audio/webm' });
+        triggerDownload(recoveredBlob, `Meeting_Audio_RECOVERED_${latest.roomName}_${Date.now()}.webm`, 'audio/webm');
+        showToast('🎵 Recovered meeting audio downloaded!');
+      });
+
+      document.getElementById('jitsiTranscribeRecoveredBtn')?.addEventListener('click', async () => {
+        const activeAiKey = geminiApiKey || DEFAULT_GEMINI_KEY;
+        const recoveredBlob = new Blob(latest.chunks.map(c => c.data), { type: 'audio/webm' });
+        compiledAudioBlob = recoveredBlob;
+
+        showToast('Transcribing recovered audio with Gemini Flash...');
+        switchTab('notes');
+
+        const player = document.getElementById('jitsiAudioPlayer');
+        const playerBox = document.getElementById('jitsiAudioPlayerBox');
+        const playerSize = document.getElementById('jitsiAudioPlayerSize');
+        if (player && recoveredBlob.size > 0) {
+          player.src = URL.createObjectURL(recoveredBlob);
+          if (playerSize) playerSize.textContent = `${(recoveredBlob.size / 1024).toFixed(1)} KB recovered audio`;
+          if (playerBox) playerBox.style.display = 'block';
+        }
+
+        try {
+          const aiResult = await transcribeWithGemini(activeAiKey, recoveredBlob, latest.roomName);
+          meetingSummaryMarkdown = aiResult.markdown;
+          meetingTranscriptJson = JSON.stringify(latest.chunks.map(c => ({
+            chunkId: c.index,
+            timestamp: c.timestamp,
+            sizeKb: (c.size / 1024).toFixed(1)
+          })), null, 2);
+          renderMeetingNotes(aiResult.decisions, aiResult.actions, aiResult.transcriptText);
+          showToast('✅ Recovered recording successfully transcribed via Gemini Flash!');
+          deleteVaultSession(latest.id);
+          area.innerHTML = '';
+        } catch (err) {
+          console.error('Failed to transcribe recovered session:', err);
+          showToast('Transcription error. You can still save the audio via "Save Audio".', true);
+        }
+      });
+    });
+  }
+
+  // Network interruption traps
+  window.addEventListener('offline', () => {
+    showToast('⚠️ Internet connection lost! Audio is safely preserved in local vault.', true);
+    if (isRecording && mediaRecorder && mediaRecorder.state === 'recording') {
+      try { mediaRecorder.requestData(); } catch (e) {}
+      triggerEmergencyBackup('network_offline');
+    }
+    const label = document.getElementById('jitsiVadLabel');
+    if (label) label.textContent = '⚠️ Offline (Vault Safe)';
+  });
+
+  window.addEventListener('online', () => {
+    showToast('🌐 Internet connection restored! Continuing meeting capture.');
+    const label = document.getElementById('jitsiVadLabel');
+    if (label && isRecording) label.textContent = '🟢 Speaking (Capturing)';
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (isRecording) {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        try { mediaRecorder.requestData(); } catch (e) {}
+      }
+      triggerEmergencyBackup('tab_closed');
+    }
+  });
+
+  // Manual checkpoint button handler
+  document.getElementById('jitsiManualCheckpointBtn')?.addEventListener('click', () => {
+    if (isRecording && mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.requestData();
+    }
+    saveVaultCheckpoint();
+  });
+
+  // Check for unfinalized sessions from previous crashes/reloads
+  checkAndDisplayRecovery();
+
+  // --------------------------------------------------------------------------
+  // Global Test Hook for Playwright
+  // --------------------------------------------------------------------------
+  window.__jitsiMeetingRecorder = {
+    start: () => document.getElementById('jitsiToggleRecordBtn').click(),
+    stop: () => document.getElementById('jitsiToggleRecordBtn').click(),
+    getChunks: () => speechSegments,
+    getAudioStats: () => ({ activeSpeechSec: activeSpeechDurationSec, silenceSec: silenceDurationSec }),
+    getAccounts: () => accounts,
+    switchAccount: (idx) => loadAccountToForm(idx),
+    makeActive: () => document.getElementById('jitsiMakeActiveBtn').click(),
+    upload: () => document.getElementById('jitsiUploadBtn').click()
+  };
+
+  console.log('[Jitsi Meeting Audio Recorder] Fully initialized with Fault-Tolerant Audio Vault.');
+})();

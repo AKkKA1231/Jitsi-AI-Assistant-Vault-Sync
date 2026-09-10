@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #0f172a;
+      color: #f8fafc;
+    }
+    h3 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge {
+      background: #10b981;
+      color: white;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+    }
+    .status-card {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .val {
+      font-weight: 600;
+      color: #818cf8;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: none;
+      background: #6366f1;
+      color: white;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    button:hover {
+      background: #4f46e5;
+    }
+    .secondary-btn {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e2e8f0;
+    }
+    .help {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 10px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h3>🤖 Jitsi AI Sync <span class="badge">Active</span></h3>
+
+  <div class="status-card">
+    <div class="row">
+      <span>Google Drive:</span>
+      <span class="val" id="popAccount">Account 1</span>
+    </div>
+    <div class="row">
+      <span>Email ID:</span>
+      <span class="val" id="popEmail" style="font-size:11px; max-width:180px; overflow:hidden; text-overflow:ellipsis;">your.name@gmail.com</span>
+    </div>
+    <div class="row">
+      <span>Free Storage:</span>
+      <span class="val" id="popFree">14.2 GB free</span>
+    </div>
+    <div class="row">
+      <span>AI Speech STT:</span>
+      <span class="val" style="color:#34d399;">Web Speech (Free)</span>
+    </div>
+  </div>
+
+  <div style="margin-bottom:10px;">
+    <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Update Your Gmail / Account ID:</label>
+    <div style="display:flex; gap:6px;">
+      <input type="email" id="popupEmailInput" placeholder="your.name@gmail.com" style="flex:1; padding:6px 8px; border-radius:4px; background:#1e293b; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
+      <button id="savePopupEmailBtn" style="width:auto; margin:0; padding:6px 10px; background:#10b981; font-size:11px;">Save</button>
+    </div>
+  </div>
+
+  <button id="openAppBtn">Open AI Workspace Dashboard</button>
+  <button id="switchAccBtn" class="secondary-btn">Rotate Drive Account (1-Click)</button>
+
+  <div class="help">
+    💡 Works automatically on <strong>meet.jit.si</strong> and any custom <strong>jitsi.org</strong> room! Look for the floating button in the bottom right corner of the call.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

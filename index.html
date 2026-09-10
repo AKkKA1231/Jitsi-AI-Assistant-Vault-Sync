@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jitsi AI Assistant & Auto-Drive Sync</title>
+  <meta name="description" content="Free Jitsi Meet integration with real-time Speech-to-Text, AI live meeting notes, video recording, and automatic Google Drive uploads.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="src/style.css">
+  <!-- Jitsi Meet External API -->
+  <script src="https://meet.jit.si/external_api.js"></script>
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    <!-- Header Navigation -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-badge">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Jitsi<span>AI</span> Sync</h1>
+          <span class="version-tag">Free Edition</span>
+        </div>
+      </div>
+
+      <!-- Quick Room Bar -->
+      <div class="room-nav-bar">
+        <div class="room-input-wrapper">
+          <span class="room-prefix">meet.jit.si/</span>
+          <input type="text" id="roomNameInput" placeholder="room-name" value="teamsync-demo">
+        </div>
+        <input type="text" id="userNameInput" placeholder="Your Name" value="Team Member" class="user-input">
+        <button id="joinMeetingBtn" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span id="joinBtnText">Join Call</span>
+        </button>
+      </div>
+
+      <!-- Action Bar & Controls -->
+      <div class="header-actions">
+        <!-- Live Recording Indicator -->
+        <div id="recordingBadge" class="status-chip recording-chip hidden">
+          <span class="pulse-dot"></span>
+          <span class="rec-timer" id="recTimer">REC 00:00</span>
+        </div>
+
+        <!-- Google Drive Active Account Chip -->
+        <div class="status-chip drive-chip" id="driveStatusBtn" title="Click to manage Google Drive storage and credentials">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7.71 3.5 1.15 15l3.43 6 6.55-11.5L7.71 3.5zm3.43 6 3.43 6h7.71l-3.43-6h-7.71zm5.14 0 6.57 11.5h-6.86L12.85 9.5h3.43z"/>
+          </svg>
+          <span id="activeAccountLabel">Drive: Account 1</span>
+          <span class="badge-quota" id="driveQuotaBadge">14.2 GB free</span>
+        </div>
+
+        <!-- Settings Trigger -->
+        <button id="openSettingsBtn" class="icon-btn" title="Settings & Google Drive Accounts">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-content">
+      <!-- Left: Jitsi Meet Viewport -->
+      <section class="video-section">
+        <div id="jitsiContainer" class="jitsi-frame-container">
+          <div class="empty-state" id="jitsiEmptyState">
+            <div class="empty-state-card">
+              <div class="icon-ring">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <path d="M23 7l-7 5 7 5V7z"/>
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+                </svg>
+              </div>
+              <h2>Ready to start your meeting</h2>
+              <p>Type a room name above and click <strong>Join Call</strong>. Speech-to-text, live AI notes, and Google Drive video auto-upload will initialize automatically!</p>
+              <div class="features-checklist">
+                <div class="check-item">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>100% Free Jitsi Meet integration (no paid JaaS needed)</span>
+                </div>
+                <div class="check-item">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Real-time Speech-to-Text & speaker detection</span>
+                </div>
+                <div class="check-item">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Live & post-call AI notes with Action Items</span>
+                </div>
+                <div class="check-item">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  <span>Direct auto-upload to Google Drive with 1-click quota switcher</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Floating Meeting Controller -->
+        <div class="meeting-dock-bar" id="meetingDock">
+          <button id="toggleRecordBtn" class="dock-btn record-toggle" title="Start / Stop Recording">
+            <svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <circle cx="12" cy="12" r="4" fill="currentColor"/>
+            </svg>
+            <span id="recordBtnLabel">Start Recording</span>
+          </button>
+
+          <button id="toggleSttBtn" class="dock-btn active" title="Toggle Speech-to-Text">
+            <svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            </svg>
+            <span id="sttBtnLabel">STT Active</span>
+          </button>
+
+          <button id="generateNotesBtn" class="dock-btn" title="Refresh Live AI Notes">
+            <svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/>
+            </svg>
+            <span>Update AI Notes</span>
+          </button>
+
+          <button id="exportDriveBtn" class="dock-btn btn-drive-sync" title="Manually Sync to Google Drive">
+            <svg class="dock-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M7.71 3.5 1.15 15l3.43 6 6.55-11.5L7.71 3.5zm3.43 6 3.43 6h7.71l-3.43-6h-7.71zm5.14 0 6.57 11.5h-6.86L12.85 9.5h3.43z"/>
+            </svg>
+            <span>Save to Drive</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Right: AI Co-Pilot & Transcription Sidebar -->
+      <aside class="sidebar-panel">
+        <div class="sidebar-tabs">
+          <button class="tab-btn active" data-tab="tab-live-notes">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></svg>
+            AI Notes & Tasks
+          </button>
+          <button class="tab-btn" data-tab="tab-transcript">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Live Speech
+            <span class="badge-count" id="transcriptCount">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tab-uploads">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7.71 3.5 1.15 15l3.43 6 6.55-11.5L7.71 3.5z"/></svg>
+            Uploads
+          </button>
+        </div>
+
+        <!-- Tab 1: AI Notes & Summary -->
+        <div class="tab-content active" id="tab-live-notes">
+          <div class="notes-header">
+            <div class="header-subtitle">
+              <span class="live-pulse"></span>
+              <span>Autonomous AI Note Taker</span>
+            </div>
+            <button id="copyNotesBtn" class="mini-btn" title="Copy markdown to clipboard">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+              Copy
+            </button>
+          </div>
+
+          <div class="notes-body" id="aiNotesContainer">
+            <!-- Dynamic AI Generated Notes will appear here -->
+            <div class="placeholder-notes">
+              <div class="magic-sparkle">✨</div>
+              <h4>Listening for meeting discussion...</h4>
+              <p>As participants talk, the AI note taker will automatically distill key decisions, discussion points, and action items in real-time.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Real-time Transcript Feed -->
+        <div class="tab-content" id="tab-transcript">
+          <div class="transcript-controls">
+            <div class="stt-status">
+              <span class="mic-dot" id="micIndicator"></span>
+              <span id="sttStatusText">Microphone listening</span>
+            </div>
+            <div class="controls-actions" style="display: flex; gap: 6px;">
+              <button id="simulateDemoSpeechBtn" class="mini-btn" title="Simulate sample meeting speech to test STT & AI notes">⚡ Demo Speech</button>
+              <button id="clearTranscriptBtn" class="mini-btn" title="Clear transcript">Clear</button>
+            </div>
+          </div>
+
+          <div class="transcript-feed" id="transcriptFeed">
+            <!-- Transcripts inserted here -->
+            <div class="transcript-empty">
+              <p>Speech will appear here with timestamps as you talk in the call.</p>
+            </div>
+          </div>
+
+          <div class="interim-box" id="interimTranscriptBox">
+            <span class="interim-label">Live:</span>
+            <span id="interimText">...</span>
+          </div>
+        </div>
+
+        <!-- Tab 3: Uploads & Drive Sync Queue -->
+        <div class="tab-content" id="tab-uploads">
+          <div class="uploads-summary">
+            <h4>Google Drive Cloud Archive</h4>
+            <p>Meeting recordings and markdown summaries uploaded automatically to your configured Google Drive.</p>
+          </div>
+
+          <div class="drive-target-box">
+            <div class="target-title">Target Folder in Google Drive:</div>
+            <div class="target-path" id="targetFolderPath">📁 Jitsi_Meetings / 2026-09-10_teamsync-demo</div>
+          </div>
+
+          <div class="upload-list" id="uploadList">
+            <!-- Upload tasks -->
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Post-Meeting Summary & Upload Modal -->
+    <div class="modal-overlay hidden" id="postMeetingModal">
+      <div class="modal-card modal-large">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div class="icon-chip green-chip">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <div>
+              <h3>Meeting Completed & Package Ready</h3>
+              <p class="modal-subtitle">AI notes generated & video recording prepared for Google Drive</p>
+            </div>
+          </div>
+          <button class="close-modal-btn" id="closePostModalBtn">&times;</button>
+        </div>
+
+        <div class="modal-body modal-grid">
+          <div class="summary-preview-col">
+            <div class="section-label">Executive AI Summary & Action Items</div>
+            <div class="summary-box markdown-view" id="postSummaryPreview">
+              <!-- Summary inserted here -->
+            </div>
+          </div>
+
+          <div class="upload-action-col">
+            <div class="section-label">Google Drive Auto-Upload Status</div>
+            
+            <div class="account-selector-card">
+              <label>Target Account:</label>
+              <div class="account-badge-row">
+                <span class="account-name-badge" id="modalAccountName">Account 1 (Default)</span>
+                <span class="account-space-badge" id="modalAccountSpace">14.2 GB free</span>
+              </div>
+              <p class="quota-warning-text" id="quotaAlert" style="display:none;">⚠️ Quota low on this account. You can switch ID/Password below!</p>
+            </div>
+
+            <div class="upload-progress-wrapper" id="uploadProgressBox">
+              <div class="progress-bar-container">
+                <div class="progress-fill" id="uploadProgressBar" style="width: 0%;"></div>
+              </div>
+              <div class="progress-text" id="uploadProgressText">Ready to upload recording & notes...</div>
+            </div>
+
+            <div class="modal-actions-bar">
+              <button id="confirmDriveUploadBtn" class="btn btn-primary btn-full">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7.71 3.5 1.15 15l3.43 6 6.55-11.5L7.71 3.5z"/></svg>
+                Upload to Google Drive Now
+              </button>
+              <button id="downloadLocalZipBtn" class="btn btn-secondary btn-full">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Files Locally (Backup)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal (Google Drive Accounts & Simple ID/Password Quota Switcher) -->
+    <div class="modal-overlay hidden" id="settingsModal">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <div class="icon-chip blue-chip">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M7.71 3.5 1.15 15l3.43 6 6.55-11.5L7.71 3.5zm3.43 6 3.43 6h7.71l-3.43-6h-7.71zm5.14 0 6.57 11.5h-6.86L12.85 9.5h3.43z"/></svg>
+            </div>
+            <div>
+              <h3>Google Drive & AI Settings</h3>
+              <p class="modal-subtitle">Configure upload accounts. Switch ID/password when 15 GB space is full.</p>
+            </div>
+          </div>
+          <button class="close-modal-btn" id="closeSettingsBtn">&times;</button>
+        </div>
+
+        <div class="modal-body settings-body">
+          <!-- Google Drive Multi-Account Manager -->
+          <div class="settings-section">
+            <div class="section-title-row">
+              <h4>Google Drive Accounts</h4>
+              <span class="help-hint">Simple ID & Key update whenever space is over</span>
+            </div>
+
+            <div class="accounts-tabs-list" id="accountsTabsList">
+              <!-- Account tabs generated dynamically -->
+            </div>
+
+            <!-- Active Account Edit Form -->
+            <div class="account-edit-box" id="accountEditForm">
+              <div class="form-group">
+                <label for="accountLabelInput">Account Nickname</label>
+                <input type="text" id="accountLabelInput" placeholder="e.g. Account 1 (Main Drive)">
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="clientIdInput">Client ID / Account ID</label>
+                  <input type="text" id="clientIdInput" placeholder="Google OAuth Client ID or Email">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="clientSecretInput">Client Secret / Key / Token</label>
+                  <input type="password" id="clientSecretInput" placeholder="OAuth Secret, Token or Service Key">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label for="driveFolderInput">Root Upload Folder Name</label>
+                  <input type="text" id="driveFolderInput" value="Jitsi_Meetings" placeholder="Jitsi_Meetings">
+                </div>
+                <div class="form-group flex-1">
+                  <label for="storageLimitInput">Storage Quota Limit</label>
+                  <select id="storageLimitInput">
+                    <option value="15">15 GB (Google Free Account)</option>
+                    <option value="100">100 GB (Google Basic)</option>
+                    <option value="2000">2 TB (Workspace)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="storage-meter-block">
+                <div class="meter-label-row">
+                  <span>Storage Used on this Account:</span>
+                  <span id="meterText">0.8 GB / 15.0 GB</span>
+                </div>
+                <div class="meter-bar">
+                  <div class="meter-fill" id="meterFill" style="width: 5%;"></div>
+                </div>
+                <div class="meter-helper">
+                  💡 When this account reaches full capacity, simply switch to <strong>Account 2</strong> or paste new credentials above!
+                </div>
+              </div>
+
+              <div class="account-actions-row">
+                <button id="saveAccountBtn" class="btn btn-primary">Save Account Details</button>
+                <button id="addNewAccountBtn" class="btn btn-secondary">+ Add Another Google Account</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI Provider Settings (Optional Gemini/OpenAI API key) -->
+          <div class="settings-section">
+            <div class="section-title-row">
+              <h4>AI Note-Taker Engine</h4>
+              <span class="help-hint">Built-in smart summarizer or plug in your own API key</span>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="aiProviderSelect">AI Engine</label>
+                <select id="aiProviderSelect">
+                  <option value="builtin">Built-in Intelligent Synthesizer (Zero Config / Instant)</option>
+                  <option value="gemini">Google Gemini 1.5 / 2.0 (Free API key)</option>
+                  <option value="openai">OpenAI GPT-4o / GPT-3.5</option>
+                </select>
+              </div>
+              <div class="form-group flex-1">
+                <label for="aiApiKeyInput">API Key (Optional)</label>
+                <input type="password" id="aiApiKeyInput" placeholder="Enter Gemini or OpenAI API Key">
+              </div>
+            </div>
+          </div>
+
+          <!-- Jitsi Server Domain Settings (meet.jit.si or self-hosted from jitsi.org) -->
+          <div class="settings-section">
+            <div class="section-title-row">
+              <h4>Jitsi Server Instance</h4>
+              <span class="help-hint">Compatible with meet.jit.si or self-hosted servers from jitsi.org</span>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="jitsiDomainInput">Server Domain</label>
+                <input type="text" id="jitsiDomainInput" placeholder="meet.jit.si" value="meet.jit.si">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="closeSettingsFooterBtn" class="btn btn-primary">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toastNotification" class="toast hidden">
+      <span id="toastMessage">Notification message</span>
+    </div>
+  </div>
+
+  <!-- Application Core Scripts -->
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
