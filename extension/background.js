@@ -10,7 +10,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
     return true; // Keep message channel open for async response
   }
+
+  if (request.action === 'DRIVE_UPLOAD_WEBHOOK') {
+    handleDriveWebhookUpload(request)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
+    return true; // Keep message channel open for async response
+  }
 });
+
+async function handleDriveWebhookUpload({ webhookUrl, payload }) {
+  console.log('[Background Service Worker] Dispatching Webhook upload to Google Apps Script...');
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    throw new Error(`Google Apps Script returned HTTP ${res.status}`);
+  }
+
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (parseErr) {
+    throw new Error(`Invalid JSON response from Apps Script: ${text.slice(0, 120)}`);
+  }
+
+  if (!json.success) {
+    throw new Error(json.error || 'Apps Script returned unsuccessful status');
+  }
+
+  return json;
+}
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 const GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];

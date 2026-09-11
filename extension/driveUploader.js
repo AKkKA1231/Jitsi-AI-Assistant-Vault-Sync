@@ -214,21 +214,48 @@
       fileContent: markdownText || '' // Alias for Apps Script
     };
 
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) {
-      throw new Error(`Google Apps Script returned HTTP ${res.status}`);
+    // Route via extension background service worker to bypass page CSP on meet.jit.si
+    let json = null;
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+      try {
+        json = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({
+            action: 'DRIVE_UPLOAD_WEBHOOK',
+            webhookUrl,
+            payload
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else if (response && response.success) {
+              resolve(response.data);
+            } else {
+              reject(new Error(response?.error || 'Background worker upload failed'));
+            }
+          });
+        });
+      } catch (bgErr) {
+        console.warn('[Drive Uploader] Background worker upload failed, attempting direct fetch:', bgErr);
+      }
     }
 
-    const json = await res.json();
-    if (!json.success) {
-      throw new Error(json.error || 'Apps Script sync returned unsuccessful result');
+    // Direct fetch fallback for test environments or standalone execution
+    if (!json) {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        throw new Error(`Google Apps Script returned HTTP ${res.status}`);
+      }
+
+      json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error || 'Apps Script sync returned unsuccessful result');
+      }
     }
 
     onProgress(100, `Upload complete!`);
