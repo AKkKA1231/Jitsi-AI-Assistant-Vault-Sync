@@ -26,8 +26,21 @@
   }
 
   function setStorageItem(key, val) {
+    // 1. Local storage fallback
     try {
       window.localStorage.setItem(key, val);
+    } catch (e) {}
+
+    // 2. Extension sync storage (across all browser instances & meetings)
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        if (chrome.storage.sync) {
+          chrome.storage.sync.set({ [key]: val });
+        }
+        if (chrome.storage.local) {
+          chrome.storage.local.set({ [key]: val });
+        }
+      }
     } catch (e) {}
   }
 
@@ -55,6 +68,43 @@
     setStorageItem(STORAGE_ACTIVE_KEY, String(activeAccIdx));
     setStorageItem(STORAGE_AI_KEY, geminiApiKey);
   }
+
+  // Hydrate from chrome.storage asynchronously across all tabs/windows
+  function hydrateStorageFromExtension() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage) {
+        const area = chrome.storage.sync || chrome.storage.local;
+        if (area) {
+          area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY], (result) => {
+            if (chrome.runtime.lastError || !result) return;
+            if (result[STORAGE_AI_KEY] && typeof result[STORAGE_AI_KEY] === 'string') {
+              geminiApiKey = result[STORAGE_AI_KEY].trim();
+              try { window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey); } catch (e) {}
+              const keyInput = document.getElementById('jitsiGeminiKeyInput');
+              if (keyInput) keyInput.value = geminiApiKey;
+              const quickInput = document.getElementById('jitsiQuickGeminiKey');
+              if (quickInput) quickInput.value = geminiApiKey;
+              updateAiKeyDisplay();
+            }
+          });
+        }
+
+        // Listen for storage changes from popup or another tab
+        chrome.storage.onChanged.addListener((changes, namespace) => {
+          if (changes[STORAGE_AI_KEY] && changes[STORAGE_AI_KEY].newValue) {
+            geminiApiKey = changes[STORAGE_AI_KEY].newValue.trim();
+            try { window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey); } catch (e) {}
+            const keyInput = document.getElementById('jitsiGeminiKeyInput');
+            if (keyInput) keyInput.value = geminiApiKey;
+            const quickInput = document.getElementById('jitsiQuickGeminiKey');
+            if (quickInput) quickInput.value = geminiApiKey;
+            updateAiKeyDisplay();
+          }
+        });
+      }
+    } catch (e) {}
+  }
+  hydrateStorageFromExtension();
 
   // --------------------------------------------------------------------------
   // Persistent IndexedDB Audio Vault (Fault-Tolerant Audio Recovery)
@@ -383,13 +433,13 @@
           Powered by Google Gemini Flash to transcribe meeting audio with speaker identification & decision extraction:
         </p>
         <div style="display:flex; gap:6px;">
-          <input type="password" id="jitsiQuickGeminiKey" value="${escapeHtml(geminiApiKey)}" placeholder="Paste key or use default" style="flex:1; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
+          <input type="password" id="jitsiQuickGeminiKey" value="${escapeHtml(geminiApiKey)}" placeholder="Paste Gemini API key" style="flex:1; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
           <button id="jitsiRunAiTranscribeBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="padding:8px 12px; font-size:11px; white-space:nowrap;">
             🚀 Transcribe Now
           </button>
         </div>
-        <div style="font-size:10px; color:#34d399; margin-top:6px; display:flex; align-items:center; gap:4px;">
-          <span>✓ Gemini Flash Active (Project 836529309180)</span>
+        <div id="jitsiQuickKeyStatus" style="font-size:10px; margin-top:6px; display:flex; align-items:center; gap:4px;">
+          ${geminiApiKey ? '<span style="color:#34d399;">✓ Gemini Flash Active & Saved</span>' : '<span style="color:#f59e0b;">⚠️ Enter Gemini API key to enable speech-to-text</span>'}
         </div>
       </div>
 
@@ -408,34 +458,34 @@
         <button id="jitsiCopyTranscriptBtn" class="jitsi-ai-ext-switch-btn" style="font-size:10px; padding:3px 8px;">📋 Copy Text</button>
       </div>
       <div class="jitsi-ai-ext-card" id="jitsiTranscriptBox" style="max-height:180px; overflow-y:auto; font-size:12px; color:#cbd5e1; line-height:1.5;">
-        <em style="color:#64748b;">Post-meeting transcript will be rendered here.</em>
+        <em style="color:#64748b; font-size:12px;">Transcript will appear here...</em>
       </div>
     </div>
 
-    <!-- Tab 3: Google Drive Accounts & AI Engine Settings -->
+    <!-- Tab 3: Settings Panel -->
     <div class="jitsi-ai-ext-content" id="jitsiSettingsTab" style="display:none;">
-      <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Switcher</div>
+      <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Config</div>
       
-      <!-- Account Selection Pills -->
-      <div class="jitsi-ai-pill-row">
-        <button id="jitsiPill0" class="jitsi-ai-pill-btn active">Account 1 (Primary)</button>
-        <button id="jitsiPill1" class="jitsi-ai-pill-btn">Account 2 (Backup)</button>
+      <!-- Account Switching Pills -->
+      <div style="display:flex; gap:6px; margin-bottom:12px;">
+        <button id="jitsiAccountPill0" class="jitsi-ai-ext-switch-btn active" style="flex:1;">Account 1 (Primary)</button>
+        <button id="jitsiAccountPill1" class="jitsi-ai-ext-switch-btn" style="flex:1;">Account 2 (Backup)</button>
       </div>
 
-      <div class="jitsi-ai-ext-card">
+      <div class="jitsi-ai-ext-card" id="jitsiAccountEditCard">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <span style="font-size:11px; font-weight:700; color:#818cf8;" id="jitsiEditingLabel">Editing Account 1</span>
-          <span style="font-size:10px; color:#34d399;" id="jitsiActiveBadge">● Active Target</span>
+          <span style="font-weight:700; font-size:12px; color:#cbd5e1;" id="jitsiEditingLabel">Editing Account 1</span>
+          <span class="jitsi-ai-stats-pill" id="jitsiActiveBadge" style="display:inline;">Active</span>
         </div>
-
-        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Your Actual Google / Gmail ID:</label>
-        <input type="email" id="jitsiEmailInput" placeholder="your.actual.email@gmail.com" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:10px;">
-
-        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Account Nickname:</label>
-        <input type="text" id="jitsiNameInput" placeholder="e.g. Account 1 (Primary Drive)" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:10px;">
-
-        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Target Google Drive Folder:</label>
-        <input type="text" id="jitsiFolderInput" value="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:12px;">
+        
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Account Display Name:</label>
+        <input type="text" id="jitsiAccNameInput" placeholder="e.g. Work Drive" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
+        
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google / Gmail ID:</label>
+        <input type="email" id="jitsiAccEmailInput" placeholder="your.name@gmail.com" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
+        
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Drive Target Folder:</label>
+        <input type="text" id="jitsiAccFolderInput" placeholder="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:12px;">
 
         <div style="display:flex; gap:8px;">
           <button id="jitsiSaveAccountBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1;">💾 Save Account</button>
@@ -444,13 +494,17 @@
       </div>
 
       <!-- Optional AI Transcription Key (Gemini Flash or Whisper) -->
-      <div class="jitsi-ai-ext-section-title" style="margin-top:14px;">AI Transcription Engine (Optional)</div>
+      <div class="jitsi-ai-ext-section-title" style="margin-top:14px;">AI Transcription Engine (Gemini Flash)</div>
       <div class="jitsi-ai-ext-card">
         <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google Gemini API Key (Multimodal Audio):</label>
-        <input type="password" id="jitsiGeminiKeyInput" placeholder="Paste free Gemini API key (AI Studio)" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
+        <input type="password" id="jitsiGeminiKeyInput" placeholder="Paste free Gemini API key (AI Studio)" value="${escapeHtml(geminiApiKey)}" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:6px;">
         
+        <div id="jitsiSettingsKeyStatus" style="margin-bottom:8px;">
+          ${geminiApiKey ? '<span style="color:#34d399; font-size:11px; font-weight:600;">✓ Saved in browser storage & ready</span>' : '<span style="color:#94a3b8; font-size:11px;">(No key saved - using built-in NLP minutes)</span>'}
+        </div>
+
         <div style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:10px;">
-          💡 Gemini 1.5 Flash natively transcribes full audio chunks for free. Get a zero-cost key at <a href="https://aistudio.google.com" target="_blank" style="color:#818cf8;">aistudio.google.com</a>. If blank, built-in post-call minutes synthesis is used.
+          💡 Gemini Flash natively transcribes audio chunks. Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8;">aistudio.google.com</a>. Key automatically auto-saves on paste!
         </div>
         <button id="jitsiSaveAiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="width:100%;">Save AI Key</button>
       </div>
@@ -589,14 +643,67 @@
     showToast(`Switched active Drive to ${accounts[activeAccIdx].name}`);
   });
 
+  function updateAiKeyDisplay() {
+    const hasKey = Boolean(geminiApiKey && geminiApiKey.trim());
+    
+    const settingsStatus = document.getElementById('jitsiSettingsKeyStatus');
+    if (settingsStatus) {
+      settingsStatus.innerHTML = hasKey 
+        ? '<span style="color:#34d399; font-size:11px; font-weight:600;">✓ Saved in browser storage & ready</span>'
+        : '<span style="color:#94a3b8; font-size:11px;">(No key saved - using built-in NLP minutes)</span>';
+    }
+
+    const quickStatus = document.getElementById('jitsiQuickKeyStatus');
+    if (quickStatus) {
+      quickStatus.innerHTML = hasKey
+        ? '<span style="color:#34d399;">✓ Gemini Flash Active & Saved</span>'
+        : '<span style="color:#f59e0b;">⚠️ Enter Gemini API key to enable speech-to-text</span>';
+    }
+
+    if (geminiInput && geminiInput.value !== (geminiApiKey || '')) {
+      geminiInput.value = geminiApiKey || '';
+    }
+    const quickInput = document.getElementById('jitsiQuickGeminiKey');
+    if (quickInput && quickInput.value !== (geminiApiKey || '')) {
+      quickInput.value = geminiApiKey || '';
+    }
+  }
+
+  // Auto-save on typing or pasting in Settings tab
+  if (geminiInput) {
+    const handleSettingsKeyChange = () => {
+      geminiApiKey = geminiInput.value.trim();
+      saveSettings();
+      updateAiKeyDisplay();
+    };
+    geminiInput.addEventListener('input', handleSettingsKeyChange);
+    geminiInput.addEventListener('change', handleSettingsKeyChange);
+    geminiInput.addEventListener('paste', () => setTimeout(handleSettingsKeyChange, 40));
+  }
+
+  // Auto-save on typing or pasting in Notes tab quick input
+  const quickKeyInput = document.getElementById('jitsiQuickGeminiKey');
+  if (quickKeyInput) {
+    const handleQuickKeyChange = () => {
+      geminiApiKey = quickKeyInput.value.trim();
+      saveSettings();
+      updateAiKeyDisplay();
+    };
+    quickKeyInput.addEventListener('input', handleQuickKeyChange);
+    quickKeyInput.addEventListener('change', handleQuickKeyChange);
+    quickKeyInput.addEventListener('paste', () => setTimeout(handleQuickKeyChange, 40));
+  }
+
   document.getElementById('jitsiSaveAiKeyBtn').addEventListener('click', () => {
     geminiApiKey = geminiInput.value.trim();
     saveSettings();
-    showToast(geminiApiKey ? 'Gemini API Key saved for multimodal audio transcription!' : 'Cleared AI Key');
+    updateAiKeyDisplay();
+    showToast(geminiApiKey ? '✅ Gemini API Key saved for all future meetings!' : 'Cleared AI Key');
   });
 
   updateDriveHeader();
   loadAccountToForm(activeAccIdx);
+  updateAiKeyDisplay();
 
   // --------------------------------------------------------------------------
   // Multi-Participant Audio Mixer (Remote Audio Elements + Local Microphone)

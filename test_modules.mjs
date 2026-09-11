@@ -268,6 +268,28 @@ it('Should have Gemini Flash model cascade configured', () => {
   assert.ok(contentJs.includes('gemini-3.6-flash'), 'content.js must use gemini-3.6-flash');
 });
 
+it('Should verify Gemini API Key persistence and auto-save synchronization across extension', () => {
+  const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
+  const popupJs = fs.readFileSync(path.resolve('./extension/popup.js'), 'utf-8');
+  const popupHtml = fs.readFileSync(path.resolve('./extension/popup.html'), 'utf-8');
+
+  // Verify storage key consistency
+  assert.ok(contentJs.includes("const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key'"), 'content.js must define STORAGE_AI_KEY');
+  assert.ok(popupJs.includes("const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key'"), 'popup.js must define STORAGE_AI_KEY');
+
+  // Verify chrome.storage sync & local fallback integration
+  assert.ok(contentJs.includes('chrome.storage.sync'), 'content.js must support chrome.storage.sync');
+  assert.ok(contentJs.includes('chrome.storage.local'), 'content.js must support chrome.storage.local');
+  assert.ok(contentJs.includes('chrome.storage.onChanged'), 'content.js must listen for key updates across tabs');
+
+  // Verify auto-save event listeners on typing/pasting
+  assert.ok(contentJs.includes('addEventListener(\'paste\''), 'content.js must auto-save on paste');
+  assert.ok(contentJs.includes('updateAiKeyDisplay'), 'content.js must provide visual confirmation badge');
+
+  // Verify popup UI input
+  assert.ok(popupHtml.includes('id="popupGeminiKeyInput"'), 'popup.html must have dedicated Gemini key input');
+});
+
 await itAsync('Should verify live Gemini API connection if key is provided', async () => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {
