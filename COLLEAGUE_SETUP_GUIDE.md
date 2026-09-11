@@ -56,28 +56,53 @@ The assistant uses Google's ultra-fast Gemini Flash model to generate notes and 
 If you want meeting notes and audio recordings automatically uploaded to your Google Drive:
 
 1. Open [script.new](https://script.new) in your browser.
-2. Paste this short Google Apps Script:
+2. Replace all existing code with this Google Apps Script:
    ```javascript
    function doPost(e) {
-     var data = JSON.parse(e.postData.contents);
-     var folder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
-     var targetFolder = folder.hasNext() ? folder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
-     
-     var subFolder = targetFolder.createFolder(data.roomName + "_" + new Date().toISOString().slice(0,10));
-     var noteFile = subFolder.createFile(data.fileName || "Summary.md", data.fileContent || "", "text/markdown");
-     
-     return ContentService.createTextOutput(JSON.stringify({
-       success: true,
-       folderUrl: subFolder.getUrl(),
-       fileUrl: noteFile.getUrl()
-     })).setMimeType(ContentService.MimeType.JSON);
+     try {
+       var data = JSON.parse(e.postData.contents);
+       var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
+       var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+       
+       var room = data.roomName || "Meeting";
+       var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
+       var subFolder = parentFolder.createFolder(room + "_" + dateStr);
+       
+       // 1. Save Meeting Summary & Action Items (.md)
+       var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio attached.";
+       var mdFile = subFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+       
+       // 2. Save Audio Recording (.webm)
+       var audioUrl = null;
+       var audioBase64 = data.audioBase64 || data.base64Audio;
+       if (audioBase64 && audioBase64.length > 0) {
+         var audioBytes = Utilities.base64Decode(audioBase64);
+         var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
+         var audioFile = subFolder.createFile(audioBlob);
+         audioUrl = audioFile.getUrl();
+       }
+       
+       return ContentService.createTextOutput(JSON.stringify({
+         success: true,
+         folderId: subFolder.getId(),
+         folderUrl: subFolder.getUrl(),
+         notesUrl: mdFile.getUrl(),
+         audioUrl: audioUrl
+       })).setMimeType(ContentService.MimeType.JSON);
+     } catch (err) {
+       return ContentService.createTextOutput(JSON.stringify({
+         success: false,
+         error: err.toString()
+       })).setMimeType(ContentService.MimeType.JSON);
+     }
    }
    ```
 3. Click **Deploy** → **New deployment** → Select type: **Web app**.
    - **Execute as**: *Me*
    - **Who has access**: *Anyone*
-4. Copy the resulting **Web App URL** (`https://script.google.com/macros/s/.../exec`).
-5. Paste it into the plugin's **Settings** tab under **Google Apps Script Webhook URL** and click **Save Settings**.
+4. Click **Deploy** (If Google shows *"Google hasn't verified this app"*, click **Advanced** → **Go to Untitled project (unsafe)** → **Allow**).
+5. Copy the resulting **Web App URL** (`https://script.google.com/macros/s/.../exec`).
+6. Paste it into the plugin's **Settings** tab under **Google Apps Script Webhook URL** and click **Save Settings**.
    > 💡 *If you skip this step, clicking "Upload to Drive" will simply download the clean Markdown summary and recording directly to your computer!*
 
 ---

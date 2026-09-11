@@ -1628,7 +1628,14 @@
     const audioFileName = `Meeting_Audio_${filenamePrefix}.webm`;
     const markdownFileName = `Meeting_Summary_${filenamePrefix}.md`;
 
-    if (!meetingSummaryMarkdown) {
+    // 1. If call is actively recording, finalize and flush the audio buffers first
+    if (isRecording) {
+      showToast('Finalizing meeting audio before upload...');
+      stopRecording();
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
       await generatePostMeetingTranscription();
     }
 
@@ -1646,11 +1653,13 @@
     }
     if (statusText) statusText.textContent = `Preparing meeting package for Google Drive (${acc.name})...`;
 
-    // 1. Guaranteed Local Preservation: trigger browser downloads immediately so data is NEVER lost
+    // Guaranteed Local Preservation: trigger browser downloads immediately so data is NEVER lost
     if (compiledAudioBlob && compiledAudioBlob.size > 0) {
       triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
     }
-    triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+    if (meetingSummaryMarkdown && meetingSummaryMarkdown.trim()) {
+      triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+    }
 
     const creds = {
       webhookUrl: acc.webhookUrl || '',
@@ -1666,6 +1675,7 @@
       const result = await uploader.uploadPackage({
         credentials: creds,
         folderName: acc.folderName || 'Jitsi_Meetings',
+        roomName: room,
         audioBlob: compiledAudioBlob,
         audioFileName: audioFileName,
         markdownText: meetingSummaryMarkdown,

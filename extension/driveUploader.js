@@ -191,7 +191,7 @@
   /**
    * Upload using Google Apps Script Webhook
    */
-  async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, onProgress }) {
+  async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, onProgress }) {
     onProgress(20, `Encoding package for Google Apps Script Webhook...`);
 
     let audioBase64 = '';
@@ -203,11 +203,15 @@
 
     const payload = {
       folderName: folderName || 'Jitsi_Meetings',
+      roomName: roomName || 'Meeting',
       audioFileName: audioFileName || 'Meeting_Audio.webm',
       audioMimeType: audioBlob?.type || 'audio/webm',
       audioBase64: audioBase64,
+      base64Audio: audioBase64, // Alias for Apps Script
       markdownFileName: markdownFileName || 'Meeting_Summary.md',
-      markdownText: markdownText || ''
+      fileName: markdownFileName || 'Meeting_Summary.md', // Alias for Apps Script
+      markdownText: markdownText || '',
+      fileContent: markdownText || '' // Alias for Apps Script
     };
 
     const res = await fetch(webhookUrl, {
@@ -234,14 +238,14 @@
       folderId: json.folderId,
       folderUrl: json.folderUrl,
       audioUrl: json.audioUrl,
-      notesUrl: json.notesUrl
+      notesUrl: json.notesUrl || json.fileUrl
     };
   }
 
   /**
    * Unified meeting package dispatcher
    */
-  async function uploadPackage({ credentials, folderName, audioBlob, audioFileName, markdownText, markdownFileName, onProgress = () => {} }) {
+  async function uploadPackage({ credentials, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, onProgress = () => {} }) {
     const creds = credentials || {};
     const webhookUrl = (creds.webhookUrl || '').trim();
     const token = (creds.token || creds.clientSecret || '').trim();
@@ -255,6 +259,7 @@
         audioFileName,
         markdownText,
         markdownFileName,
+        roomName,
         onProgress
       });
     }

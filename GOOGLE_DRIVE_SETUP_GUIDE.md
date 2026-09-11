@@ -23,35 +23,37 @@ This guide explains how to connect your personal or work Google Drive account to
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-    var targetFolder = data.folderName || "Jitsi_Meetings";
+    var mainFolderName = data.folderName || "Jitsi_Meetings";
     
-    // 1. Locate or create meeting folder
-    var folders = DriveApp.getFoldersByName(targetFolder);
-    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(targetFolder);
+    // 1. Locate or create main meetings folder
+    var folders = DriveApp.getFoldersByName(mainFolderName);
+    var mainFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(mainFolderName);
 
-    var audioUrl = null;
-    var notesUrl = null;
-
-    // 2. Save Audio Recording (.webm)
-    if (data.audioBase64) {
-      var audioBytes = Utilities.base64Decode(data.audioBase64);
-      var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
-      var audioFile = folder.createFile(audioBlob);
-      audioUrl = audioFile.getUrl();
-    }
+    // 2. Create subfolder per meeting session
+    var room = data.roomName || "Meeting";
+    var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
+    var meetingFolder = mainFolder.createFolder(room + "_" + dateStr);
 
     // 3. Save Meeting Notes & Action Items (.md)
-    if (data.markdownText) {
-      var mdFile = folder.createFile(data.markdownFileName || "Meeting_Summary.md", data.markdownText, MimeType.PLAIN_TEXT);
-      notesUrl = mdFile.getUrl();
+    var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio recording attached.";
+    var mdFile = meetingFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+
+    // 4. Save Audio Recording (.webm)
+    var audioUrl = null;
+    var audioBase64 = data.audioBase64 || data.base64Audio;
+    if (audioBase64 && audioBase64.length > 0) {
+      var audioBytes = Utilities.base64Decode(audioBase64);
+      var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
+      var audioFile = meetingFolder.createFile(audioBlob);
+      audioUrl = audioFile.getUrl();
     }
 
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
-      folderId: folder.getId(),
-      folderUrl: folder.getUrl(),
-      audioUrl: audioUrl,
-      notesUrl: notesUrl
+      folderId: meetingFolder.getId(),
+      folderUrl: meetingFolder.getUrl(),
+      notesUrl: mdFile.getUrl(),
+      audioUrl: audioUrl
     })).setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {

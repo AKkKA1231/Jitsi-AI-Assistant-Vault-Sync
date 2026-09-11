@@ -272,22 +272,51 @@
         <div class="step-num">4</div>
         <span>(Optional) 60-Second Google Drive Setup</span>
       </div>
-      <p style="color:#cbd5e1; margin-bottom: 10px;">To have notes automatically uploaded to a dedicated <code>Jitsi_Meetings/</code> folder in your personal Google Drive:</p>
+      <p style="color:#cbd5e1; margin-bottom: 10px;">To have notes and audio recordings automatically uploaded to a dedicated folder in your personal Google Drive:</p>
       <ol>
-        <li>Open <a href="https://script.new" target="_blank" style="color:var(--accent);">script.new</a> and paste this simple script:</li>
+        <li>Open <a href="https://script.new" target="_blank" style="color:var(--accent);">script.new</a> in your browser and replace with this script:</li>
       </ol>
       <pre>function doPost(e) {
-  var data = JSON.parse(e.postData.contents);
-  var folder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
-  var target = folder.hasNext() ? folder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
-  var sub = target.createFolder(data.roomName + "_" + new Date().toISOString().slice(0,10));
-  var note = sub.createFile(data.fileName || "Summary.md", data.fileContent || "", "text/markdown");
-  return ContentService.createTextOutput(JSON.stringify({
-    success: true, folderUrl: sub.getUrl(), fileUrl: note.getUrl()
-  })).setMimeType(ContentService.MimeType.JSON);
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
+    var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+    
+    var room = data.roomName || "Meeting";
+    var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
+    var subFolder = parentFolder.createFolder(room + "_" + dateStr);
+    
+    // 1. Save Meeting Summary & Action Items (.md)
+    var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio attached.";
+    var mdFile = subFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+    
+    // 2. Save Audio Recording (.webm)
+    var audioUrl = null;
+    var audioBase64 = data.audioBase64 || data.base64Audio;
+    if (audioBase64 && audioBase64.length > 0) {
+      var audioBytes = Utilities.base64Decode(audioBase64);
+      var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
+      var audioFile = subFolder.createFile(audioBlob);
+      audioUrl = audioFile.getUrl();
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      folderId: subFolder.getId(),
+      folderUrl: subFolder.getUrl(),
+      notesUrl: mdFile.getUrl(),
+      audioUrl: audioUrl
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }</pre>
       <ol start="2">
         <li>Click <strong>Deploy</strong> → <strong>New deployment</strong> → Select <strong>Web app</strong> (Execute as: <em>Me</em>, Who has access: <em>Anyone</em>).</li>
+        <li>Click <strong>Deploy</strong> (if Google displays <em>"Google hasn't verified this app"</em>, click <strong>Advanced</strong> → <strong>Go to Untitled project (unsafe)</strong> → <strong>Allow</strong>).</li>
         <li>Copy the <strong>Web App URL</strong> and paste it into the plugin's <strong>Settings</strong> tab under <strong>Google Apps Script Webhook URL</strong>.</li>
       </ol>
       <div class="callout">
