@@ -207,11 +207,8 @@
       audioFileName: audioFileName || 'Meeting_Audio.webm',
       audioMimeType: audioBlob?.type || 'audio/webm',
       audioBase64: audioBase64,
-      base64Audio: audioBase64, // Alias for Apps Script
       markdownFileName: markdownFileName || 'Meeting_Summary.md',
-      fileName: markdownFileName || 'Meeting_Summary.md', // Alias for Apps Script
-      markdownText: markdownText || '',
-      fileContent: markdownText || '' // Alias for Apps Script
+      markdownText: markdownText || ''
     };
 
     // Route via extension background service worker to bypass page CSP on meet.jit.si

@@ -21,19 +21,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function handleDriveWebhookUpload({ webhookUrl, payload }) {
   console.log('[Background Service Worker] Dispatching Webhook upload to Google Apps Script...');
-  const res = await fetch(webhookUrl, {
+  let cleanUrl = (webhookUrl || '').trim();
+  if (!cleanUrl) {
+    throw new Error('Google Apps Script Webhook URL is empty. Please enter your Webhook URL in Settings.');
+  }
+
+  // Auto-correct /dev or /edit URLs
+  if (cleanUrl.endsWith('/dev')) {
+    cleanUrl = cleanUrl.slice(0, -4) + '/exec';
+  } else if (cleanUrl.endsWith('/edit')) {
+    throw new Error('Invalid URL: Please use the deployed Web App URL (ending in /exec), not the project editor URL (/edit).');
+  }
+
+  // Streamline payload to avoid memory bloat
+  const cleanPayload = {
+    folderName: payload.folderName || 'Jitsi_Meetings',
+    roomName: payload.roomName || 'Meeting',
+    audioFileName: payload.audioFileName || 'Meeting_Audio.webm',
+    audioMimeType: payload.audioMimeType || 'audio/webm',
+    audioBase64: payload.audioBase64 || payload.base64Audio || '',
+    markdownFileName: payload.markdownFileName || payload.fileName || 'Meeting_Summary.md',
+    markdownText: payload.markdownText || payload.fileContent || ''
+  };
+
+  const res = await fetch(cleanUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(cleanPayload)
   });
 
-  if (!res.ok) {
-    throw new Error(`Google Apps Script returned HTTP ${res.status}`);
+  const text = await res.text().catch(() => '');
+
+  // Check if request was redirected to Google login due to missing permissions
+  if (res.url && res.url.includes('accounts.google.com')) {
+    throw new Error('Google Apps Script Permission Error: Web App is not set to "Who has access: Anyone". Open script.google.com > Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
   }
 
-  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 400) {
+      if (text.includes('ServiceLogin') || text.includes('accounts.google.com')) {
+        throw new Error('Google Apps Script Permission Error: Web App is not set to "Who has access: Anyone". In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
+      }
+      throw new Error('Google Apps Script returned HTTP 400. In script.google.com, ensure Web App is deployed with "Execute as: Me" and "Who has access: Anyone".');
+    }
+    throw new Error(`Google Apps Script returned HTTP ${res.status}${text ? ': ' + text.slice(0, 100) : ''}`);
+  }
+
   let json;
   try {
     json = JSON.parse(text);

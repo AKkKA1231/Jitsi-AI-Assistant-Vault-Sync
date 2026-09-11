@@ -63,16 +63,26 @@ function doPost(e) {
     })).setMimeType(ContentService.MimeType.JSON);
   }
 }
+
+// Health check endpoint: visit your Web App URL in any browser tab to verify it's working!
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "ok",
+    message: "Google Drive Sync Webhook is live and ready!"
+  })).setMimeType(ContentService.MimeType.JSON);
+}
 ```
 
 4. Click **Deploy** (top-right blue button) > **New deployment**.
 5. Click the gear icon (⚙️) next to "Select type" and choose **Web app**.
-6. Fill in the fields:
+6. Fill in the fields (**CRITICAL**):
    * **Description**: `Jitsi AI Meeting Sync`
    * **Execute as**: `Me (your-email@gmail.com)`
-   * **Who has access**: `Anyone` *(Note: Since only your extension knows this unique webhook URL, it acts as your personal private secret key)*.
+   * **Who has access**: `Anyone` *(IMPORTANT: Must be "Anyone", NOT "Only myself" or "Google Account". If set to "Only myself", Google blocks extension requests with HTTP 400/401)*.
 7. Click **Deploy**, click **Authorize access**, and sign in with your Google account.
 8. Copy the **Web App URL** (looks like: `https://script.google.com/macros/s/AKfycb.../exec`).
+
+> 💡 **Quick Verification**: Paste your Web App URL into a new browser tab. You should see `{"status":"ok","message":"Google Drive Sync Webhook is live and ready!"}`. If you see that, your webhook is 100% working!
 
 ### 🔗 Connect to the Extension:
 1. Join any Jitsi call or open the extension settings.
@@ -80,7 +90,7 @@ function doPost(e) {
 3. Paste the URL into the **Google Apps Script Webhook URL** field.
 4. Click **💾 Save Account**. You will see: `✓ Connected via Google Apps Script Webhook`.
 
-Now whenever you click **Upload to Drive**, files upload directly into your personal `Jitsi_Meetings` folder on Google Drive!
+Now whenever you click **Transcribe Call** or **Upload to Drive**, files upload automatically directly into your personal `Jitsi_Meetings` folder on Google Drive!
 
 ---
 

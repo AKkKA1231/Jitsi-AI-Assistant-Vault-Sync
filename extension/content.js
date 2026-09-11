@@ -1242,7 +1242,12 @@
       await stopRecording();
       // Switch to notes tab and generate summary
       switchTab('notes');
-      generatePostMeetingTranscription();
+      showToast('✨ Synthesizing meeting notes...');
+      await generatePostMeetingTranscription();
+      // Automatically sync to Drive right after transcribing
+      if (typeof executeDriveUpload === 'function') {
+        executeDriveUpload({ isAuto: true });
+      }
     } else {
       startRecording();
     }
@@ -1636,12 +1641,12 @@
     }, 500);
   }
 
-  safeOn('jitsiTranscribeBtn', 'click', () => {
-    switchTab('notes');
-    generatePostMeetingTranscription();
-  });
+  let isDriveUploading = false;
 
-  safeOn('jitsiUploadBtn', 'click', async () => {
+  async function executeDriveUpload({ isAuto = false } = {}) {
+    if (isDriveUploading) return;
+    isDriveUploading = true;
+
     const acc = accounts[activeAccIdx] || accounts[0];
     const timestamp = new Date().toISOString().slice(0, 10);
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
@@ -1662,40 +1667,35 @@
       progressBar.style.width = '10%';
     }
 
-    // 1. If call is actively recording, finalize and flush the audio buffers first
-    if (isRecording) {
-      if (statusText) statusText.textContent = 'Finalizing meeting audio before upload...';
-      showToast('Finalizing meeting audio before upload...');
-      await stopRecording();
-      await new Promise(r => setTimeout(r, 250));
-    }
-
-    // 2. Wait for any active AI transcription synthesis already in-flight
-    if (activeTranscriptionPromise) {
-      if (statusText) statusText.textContent = 'Awaiting AI transcription...';
-      await activeTranscriptionPromise;
-    }
-
-    // 3. Compile audio & generate summary notes if not yet generated
-    if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
-      if (statusText) statusText.textContent = 'Synthesizing meeting summary...';
-      await generatePostMeetingTranscription();
-    }
-
-    if (progressBar) progressBar.style.width = '25%';
-    if (statusText) statusText.textContent = `Preparing upload package for Google Drive (${acc.name})...`;
-
-    // Note: Do NOT trigger browser downloads here prior to upload!
-    // In Chrome, initiating a file download event before or during an asynchronous fetch
-    // cancels pending network requests with "TypeError: Failed to fetch".
-    // Local backup downloads will occur safely if Drive is unconfigured or returns an error.
-
-    const creds = {
-      webhookUrl: acc.webhookUrl || '',
-      token: acc.token || (acc.clientSecret && !acc.clientSecret.includes('•') ? acc.clientSecret : '')
-    };
-
     try {
+      // 1. If call is actively recording, finalize and flush the audio buffers first
+      if (isRecording) {
+        if (statusText) statusText.textContent = 'Finalizing meeting audio before upload...';
+        showToast('Finalizing meeting audio before upload...');
+        await stopRecording();
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      // 2. Wait for any active AI transcription synthesis already in-flight
+      if (activeTranscriptionPromise) {
+        if (statusText) statusText.textContent = 'Awaiting AI transcription...';
+        await activeTranscriptionPromise;
+      }
+
+      // 3. Compile audio & generate summary notes if not yet generated
+      if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
+        if (statusText) statusText.textContent = 'Synthesizing meeting summary...';
+        await generatePostMeetingTranscription();
+      }
+
+      if (progressBar) progressBar.style.width = '25%';
+      if (statusText) statusText.textContent = `Preparing upload package for Google Drive (${acc.name})...`;
+
+      const creds = {
+        webhookUrl: (acc.webhookUrl || '').trim(),
+        token: (acc.token || (acc.clientSecret && !acc.clientSecret.includes('•') ? acc.clientSecret : '')).trim()
+      };
+
       const uploader = typeof JitsiDriveUploader !== 'undefined' ? JitsiDriveUploader : null;
       if (!uploader) {
         throw new Error('Google Drive upload module not loaded');
@@ -1777,7 +1777,26 @@
       if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${escapeHtml(err.message || err.toString())}. Local backup files downloaded.`;
       if (actionsArea) actionsArea.style.display = 'flex';
       showToast(`Drive upload failed: ${err.message}`, true);
+    } finally {
+      isDriveUploading = false;
     }
+  }
+
+  safeOn('jitsiTranscribeBtn', 'click', async () => {
+    switchTab('notes');
+    if (isRecording) {
+      showToast('Stopping recording and preparing transcription...');
+      await stopRecording();
+      await new Promise(r => setTimeout(r, 250));
+    }
+    showToast('✨ Transcribing meeting with Gemini Flash AI...');
+    await generatePostMeetingTranscription();
+    showToast('☁️ Auto-syncing transcript & audio to Google Drive...');
+    await executeDriveUpload({ isAuto: true });
+  });
+
+  safeOn('jitsiUploadBtn', 'click', () => {
+    executeDriveUpload({ isAuto: false });
   });
 
   safeOn('jitsiCloseUploadBox', 'click', () => {
