@@ -284,17 +284,18 @@
         <ol>
           <li>Join any meeting: <br><strong>meet.jit.si/YourCallRoom</strong></li>
           <li>Click the floating <strong>AI Assistant</strong> button on the right edge.</li>
-          <li>Click <strong>Settings (⚙️)</strong> and paste your free <strong>Gemini API Key</strong> (<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#2563eb;">aistudio.google.com</a>).</li>
-          <li>Click <strong>Start Recording</strong> to capture & sync!</li>
+          <li>Paste your free <strong>Gemini Flash Key</strong> (<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#2563eb;">aistudio.google.com</a>). Auto-saves!</li>
+          <li>Click <strong>Start Recording</strong> to capture &amp; sync!</li>
         </ol>
       </div>
     </div>
 
-    <!-- Resilient Recovery Callout -->
+    <!-- Resilient Recovery & Controls Callout -->
     <div class="feature-banner">
       <div class="feature-info">
-        <h4>🛡️ Zero-Loss IndexedDB Audio Vault (Crash & Disconnect Protection)</h4>
-        <p>If your Wi-Fi drops or the laptop battery sleeps mid-meeting, call audio is not lost! Simply rejoin the room. A yellow <strong>"Meeting Interruption Detected"</strong> banner will offer an immediate 1-click <strong>"Restore Recording"</strong> button.</p>
+        <h4>🛡️ Zero-Loss Audio Vault &amp; Zero-Obstruction Controls</h4>
+        <p>&bull; <strong>Non-Obstructing:</strong> Drag the floating button vertically along your screen edge, or click <strong>–</strong> to collapse it to a tiny 38px badge. It auto-hides when the sidebar opens!<br>
+        &bull; <strong>Crash Recovery:</strong> If Wi-Fi drops, reopen Jitsi. Click <strong>"Restore Recording"</strong> on the yellow banner to recover 100% of your call.</p>
       </div>
       <div class="feature-pill">Fault Tolerant</div>
     </div>
@@ -302,16 +303,16 @@
     <!-- Troubleshooting / FAQs -->
     <div class="faq-grid">
       <div class="faq-item">
-        <h5>Floating Widget Not Appearing?</h5>
-        <p>Verify you are on a <code>meet.jit.si</code> URL and press <strong>F5</strong> (refresh) once after loading the unpacked extension.</p>
+        <h5>How Does Google Drive Sync Work?</h5>
+        <p>In <strong>Settings (⚙️)</strong>, paste your 60-second Apps Script Webhook URL (see <a href="GOOGLE_DRIVE_SETUP_GUIDE.md" target="_blank" style="color:#2563eb;">Setup Guide</a>). If unconfigured, files safely download to your computer's <strong>Downloads</strong> folder.</p>
       </div>
       <div class="faq-item">
-        <h5>Microphone Permission</h5>
-        <p>Ensure your browser has permitted microphone access to the Jitsi tab so the Web Audio mixer can capture both speaker and mic audio.</p>
+        <h5>Does It Record All Participants?</h5>
+        <p>Yes! It uses client-side Web Audio mixing to capture both your microphone and the voices of everyone speaking on the call without server costs.</p>
       </div>
       <div class="faq-item">
-        <h5>Where are Transcripts Saved?</h5>
-        <p>Transcripts and executive summaries are rendered directly in the sidebar, downloadable as Markdown, and synced to Google Drive if configured.</p>
+        <h5>Where are Transcripts &amp; Summaries?</h5>
+        <p>Minutes, key decisions, and action checkboxes render live in the <strong>Notes</strong> tab, downloadable as Markdown (.md), and syncable to Drive.</p>
       </div>
       <div class="faq-item">
         <h5>Updating to Newer Versions</h5>

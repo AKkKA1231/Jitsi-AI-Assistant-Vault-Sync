@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jitsi AI Assistant & Vault Sync — Colleague Setup Guide</title>
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --success: #10b981;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border-radius: 16px;
+      border: 1px solid var(--border);
+      padding: 40px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(79, 70, 229, 0.2);
+      color: #818cf8;
+      border: 1px solid rgba(79, 70, 229, 0.4);
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #fff, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+      margin-bottom: 28px;
+    }
+    .step-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .step-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 14px;
+    }
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    ol, ul {
+      margin-left: 24px;
+      margin-bottom: 12px;
+      color: #cbd5e1;
+    }
+    li {
+      margin-bottom: 8px;
+    }
+    code {
+      background: #0f172a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--accent);
+      font-family: monospace;
+      font-size: 13px;
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    pre {
+      background: #0f172a;
+      padding: 14px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 13px;
+      color: #e2e8f0;
+      border: 1px solid var(--border);
+      margin: 12px 0;
+    }
+    .callout {
+      background: rgba(56, 189, 248, 0.08);
+      border-left: 4px solid var(--accent);
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      color: #bae6fd;
+      margin: 14px 0;
+    }
+    .tip-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    .tip-table th, .tip-table td {
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 14px;
+    }
+    .tip-table th {
+      background: #0f172a;
+      color: #f1f5f9;
+    }
+    .actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .btn {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      text-decoration: none;
+      font-size: 14px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    .btn-secondary {
+      background: rgba(255,255,255,0.08);
+      color: #f1f5f9;
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.14);
+    }
+    @media print {
+      body {
+        background: #fff;
+        color: #000;
+      }
+      .container {
+        border: none;
+        box-shadow: none;
+        padding: 0;
+        background: #fff;
+        color: #000;
+      }
+      .step-card {
+        background: #f8fafc;
+        border: 1px solid #cbd5e1;
+        color: #0f172a;
+      }
+      .step-title, h1 {
+        color: #0f172a;
+        -webkit-text-fill-color: initial;
+      }
+      code, pre {
+        background: #f1f5f9;
+        color: #0f172a;
+        border: 1px solid #cbd5e1;
+      }
+      .actions {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <span class="badge">Team Onboarding Guide</span>
+    <h1>🎙️ Jitsi AI Assistant & Vault Sync</h1>
+    <p class="subtitle">Run your own meeting copilot in Chrome, Edge, or Brave in under 3 minutes.</p>
+
+    <!-- STEP 1 -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">1</div>
+        <span>Download & Unpack the Extension</span>
+      </div>
+      <ol>
+        <li>Download the project folder or clone from GitHub:
+          <pre>git clone https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync.git</pre>
+          <em>(Or download the ZIP file and extract it anywhere on your machine).</em>
+        </li>
+        <li>Notice the <code>extension/</code> folder inside — that is your ready-to-use browser plugin!</li>
+      </ol>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">2</div>
+        <span>Load into Chrome / Edge / Brave</span>
+      </div>
+      <ol>
+        <li>Open your browser and navigate to:
+          <ul>
+            <li><strong>Chrome:</strong> <code>chrome://extensions</code></li>
+            <li><strong>Edge:</strong> <code>edge://extensions</code></li>
+            <li><strong>Brave:</strong> <code>brave://extensions</code></li>
+          </ul>
+        </li>
+        <li>Turn <strong>ON</strong> the <strong>"Developer mode"</strong> toggle in the top-right corner.</li>
+        <li>Click <strong>"Load unpacked"</strong> in the top-left toolbar.</li>
+        <li>Select the <code>extension/</code> folder.</li>
+      </ol>
+      <div class="callout">
+        ✅ <strong>Done!</strong> You will see the <strong>"Jitsi AI Assistant & Vault Sync"</strong> card appear in your extensions list.
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">3</div>
+        <span>Enter Free Gemini API Key (Saved Automatically)</span>
+      </div>
+      <ol>
+        <li>Grab a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);">Google AI Studio</a> (takes 30 seconds).</li>
+        <li>Click the puzzle icon in your browser to open the extension popup (or open any Jitsi call).</li>
+        <li>Go to the <strong>Settings</strong> tab (⚙️ gear icon).</li>
+        <li>Paste your API key into <strong>Gemini API Key</strong> and click <strong>Save Settings</strong>.</li>
+      </ol>
+      <div class="callout">
+        🔒 <strong>Private & Secure:</strong> Your key is saved locally in your browser's encrypted storage and is never uploaded anywhere.
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">4</div>
+        <span>(Optional) 60-Second Google Drive Setup</span>
+      </div>
+      <p style="color:#cbd5e1; margin-bottom: 10px;">To have notes automatically uploaded to a dedicated <code>Jitsi_Meetings/</code> folder in your personal Google Drive:</p>
+      <ol>
+        <li>Open <a href="https://script.new" target="_blank" style="color:var(--accent);">script.new</a> and paste this simple script:</li>
+      </ol>
+      <pre>function doPost(e) {
+  var data = JSON.parse(e.postData.contents);
+  var folder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
+  var target = folder.hasNext() ? folder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+  var sub = target.createFolder(data.roomName + "_" + new Date().toISOString().slice(0,10));
+  var note = sub.createFile(data.fileName || "Summary.md", data.fileContent || "", "text/markdown");
+  return ContentService.createTextOutput(JSON.stringify({
+    success: true, folderUrl: sub.getUrl(), fileUrl: note.getUrl()
+  })).setMimeType(ContentService.MimeType.JSON);
+}</pre>
+      <ol start="2">
+        <li>Click <strong>Deploy</strong> → <strong>New deployment</strong> → Select <strong>Web app</strong> (Execute as: <em>Me</em>, Who has access: <em>Anyone</em>).</li>
+        <li>Copy the <strong>Web App URL</strong> and paste it into the plugin's <strong>Settings</strong> tab under <strong>Google Apps Script Webhook URL</strong>.</li>
+      </ol>
+      <div class="callout">
+        💡 <em>Don't want to set up Google Drive? No problem! The plugin will simply download the clean Markdown summary and recording directly to your computer when you click Upload.</em>
+      </div>
+    </div>
+
+    <!-- MEETING WORKFLOW -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">5</div>
+        <span>Joining a Meeting</span>
+      </div>
+      <ol>
+        <li>Join any meeting at <a href="https://meet.jit.si" target="_blank" style="color:var(--accent);">meet.jit.si</a>.</li>
+        <li>Click the floating <strong>AI Assistant</strong> button on the right edge.</li>
+        <li>Click <strong>"Start Recording"</strong> and grant mic permissions.</li>
+        <li>View live transcriptions and AI action items. When done, click <strong>"Stop"</strong> and <strong>"Upload to Drive"</strong>!</li>
+      </ol>
+
+      <table class="tip-table">
+        <thead>
+          <tr>
+            <th>Control</th>
+            <th>What it does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Drag to Reposition</strong></td>
+            <td>Click and drag the floating AI button up or down along the edge so it never blocks your call controls.</td>
+          </tr>
+          <tr>
+            <td><strong>Minimize Button (–)</strong></td>
+            <td>Click the small minus symbol to collapse the toggle into an unobtrusive circular badge.</td>
+          </tr>
+          <tr>
+            <td><strong>Auto-Hide</strong></td>
+            <td>When the sidebar opens, the floating button automatically disappears off-screen.</td>
+          </tr>
+          <tr>
+            <td><strong>Crash Recovery</strong></td>
+            <td>Accidentally close the tab? Re-open the room and your transcript is instantly restored from IndexedDB!</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" onclick="window.print()">🖨️ Print / Save as PDF</button>
+      <a class="btn btn-secondary" href="https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync" target="_blank">🌐 GitHub Repository</a>
+    </div>
+  </div>
+</body>
+</html>
