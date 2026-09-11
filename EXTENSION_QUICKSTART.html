@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jitsi AI Assistant Vault & Sync - 1-Page Setup Guide</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --accent: #06b6d4;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --dark: #0f172a;
+      --slate-800: #1e293b;
+      --slate-600: #475569;
+      --slate-200: #e2e8f0;
+      --slate-50: #f8fafc;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--dark);
+      background: #f1f5f9;
+      line-height: 1.45;
+      padding: 24px;
+      font-size: 14px;
+    }
+
+    .page {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      padding: 32px 36px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 2px solid var(--slate-200);
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+    }
+
+    .brand h1 {
+      font-size: 22px;
+      font-weight: 800;
+      color: var(--dark);
+      letter-spacing: -0.5px;
+    }
+
+    .brand p {
+      color: var(--slate-600);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+
+    .badge-pill {
+      background: #eff6ff;
+      color: var(--primary);
+      border: 1px solid #bfdbfe;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .step-card {
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .step-num {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: white;
+      font-weight: 700;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .step-header h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--dark);
+    }
+
+    .step-card ol {
+      padding-left: 18px;
+      color: var(--slate-600);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .step-card ol li {
+      margin-bottom: 6px;
+    }
+
+    .step-card ol li strong {
+      color: var(--dark);
+    }
+
+    .code-tag {
+      background: #e2e8f0;
+      color: #0f172a;
+      font-family: monospace;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .feature-banner {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      gap: 14px;
+    }
+
+    .feature-info h4 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 2px;
+    }
+
+    .feature-info p {
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+
+    .feature-pill {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #38bdf8;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+
+    .faq-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .faq-item {
+      border-left: 3px solid var(--primary);
+      padding-left: 10px;
+    }
+
+    .faq-item h5 {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--dark);
+      margin-bottom: 2px;
+    }
+
+    .faq-item p {
+      font-size: 11.5px;
+      color: var(--slate-600);
+      line-height: 1.4;
+    }
+
+    footer {
+      border-top: 1px solid var(--slate-200);
+      padding-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--slate-600);
+    }
+
+    footer a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        background: #ffffff;
+      }
+      .page {
+        box-shadow: none;
+        padding: 16px 20px;
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page">
+    <header>
+      <div class="brand">
+        <h1>Jitsi AI Assistant Vault & Sync</h1>
+        <p>1-Page Team Quickstart Guide &bull; Browser Extension Setup</p>
+      </div>
+      <div class="badge-pill">Chrome &bull; Edge &bull; Brave</div>
+    </header>
+
+    <div class="steps-grid">
+      <!-- Step 1 -->
+      <div class="step-card">
+        <div class="step-header">
+          <div class="step-num">1</div>
+          <h3>Download & Extract</h3>
+        </div>
+        <ol>
+          <li>Download the project from GitHub: <br><strong>github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync</strong></li>
+          <li>Click <strong>Code &gt; Download ZIP</strong>.</li>
+          <li>Extract the ZIP folder onto your computer.</li>
+          <li>Locate the <strong><code class="code-tag">extension/</code></strong> folder inside.</li>
+        </ol>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="step-card">
+        <div class="step-header">
+          <div class="step-num">2</div>
+          <h3>Load in Browser</h3>
+        </div>
+        <ol>
+          <li>Open your browser's extension page:
+            <br>&bull; Chrome: <span class="code-tag">chrome://extensions</span>
+            <br>&bull; Edge: <span class="code-tag">edge://extensions</span>
+          </li>
+          <li>Turn <strong>ON</strong> the <strong>Developer mode</strong> toggle (top-right).</li>
+          <li>Click <strong>Load unpacked</strong> (top-left).</li>
+          <li>Select the <strong><code class="code-tag">extension/</code></strong> folder.</li>
+        </ol>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="step-card">
+        <div class="step-header">
+          <div class="step-num">3</div>
+          <h3>Run in Jitsi Meet</h3>
+        </div>
+        <ol>
+          <li>Join any meeting: <br><strong>meet.jit.si/YourCallRoom</strong></li>
+          <li>Click the floating <strong>AI Assistant</strong> button on the right edge.</li>
+          <li>Click <strong>Settings (⚙️)</strong> and paste your free <strong>Gemini API Key</strong> (<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#2563eb;">aistudio.google.com</a>).</li>
+          <li>Click <strong>Start Recording</strong> to capture & sync!</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Resilient Recovery Callout -->
+    <div class="feature-banner">
+      <div class="feature-info">
+        <h4>🛡️ Zero-Loss IndexedDB Audio Vault (Crash & Disconnect Protection)</h4>
+        <p>If your Wi-Fi drops or the laptop battery sleeps mid-meeting, call audio is not lost! Simply rejoin the room. A yellow <strong>"Meeting Interruption Detected"</strong> banner will offer an immediate 1-click <strong>"Restore Recording"</strong> button.</p>
+      </div>
+      <div class="feature-pill">Fault Tolerant</div>
+    </div>
+
+    <!-- Troubleshooting / FAQs -->
+    <div class="faq-grid">
+      <div class="faq-item">
+        <h5>Floating Widget Not Appearing?</h5>
+        <p>Verify you are on a <code>meet.jit.si</code> URL and press <strong>F5</strong> (refresh) once after loading the unpacked extension.</p>
+      </div>
+      <div class="faq-item">
+        <h5>Microphone Permission</h5>
+        <p>Ensure your browser has permitted microphone access to the Jitsi tab so the Web Audio mixer can capture both speaker and mic audio.</p>
+      </div>
+      <div class="faq-item">
+        <h5>Where are Transcripts Saved?</h5>
+        <p>Transcripts and executive summaries are rendered directly in the sidebar, downloadable as Markdown, and synced to Google Drive if configured.</p>
+      </div>
+      <div class="faq-item">
+        <h5>Updating to Newer Versions</h5>
+        <p>Pull or download the latest repo code, open <code>chrome://extensions</code>, and click the circular <strong>Reload (🔄)</strong> button on the extension card.</p>
+      </div>
+    </div>
+
+    <footer>
+      <div>Developed for Open Source Jitsi Meet &bull; Powered by Google Gemini Flash &amp; Web Audio API</div>
+      <div>Repo: <a href="https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync" target="_blank">AKkKA1231/Jitsi-AI-Assistant-Vault-Sync</a></div>
+    </footer>
+  </div>
+
+</body>
+</html>
