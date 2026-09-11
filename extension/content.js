@@ -551,8 +551,40 @@
     </div>
   `;
 
-  document.body.appendChild(toggleBtn);
-  document.body.appendChild(sidebar);
+  // Safe DOM Element Querying within sidebar, toggleBtn, or document
+  function getEl(id) {
+    if (!id) return null;
+    return (sidebar ? sidebar.querySelector('#' + id) : null) ||
+           (toggleBtn ? toggleBtn.querySelector('#' + id) : null) ||
+           document.getElementById(id);
+  }
+
+  // Resilient Event Listener Attacher - Never throws on null
+  function safeOn(idOrEl, event, handler) {
+    const el = typeof idOrEl === 'string' ? getEl(idOrEl) : idOrEl;
+    if (el && typeof el.addEventListener === 'function') {
+      el.addEventListener(event, handler);
+      return el;
+    }
+    return null;
+  }
+
+  // Safe UI Mounting
+  function mountUI() {
+    if (!document.body) {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mountUI, { once: true });
+      } else {
+        setTimeout(mountUI, 100);
+      }
+      return;
+    }
+    // Prevent duplicate injection if script runs multiple times
+    if (document.getElementById('jitsi-ai-sidebar')) return;
+    document.body.appendChild(toggleBtn);
+    document.body.appendChild(sidebar);
+  }
+  mountUI();
 
   // In-Sidebar Toast Notification (No Browser alert!)
   function showToast(message, isError = false) {
@@ -583,7 +615,7 @@
   }
 
   // Minimize / compact toggle button
-  const miniBtn = document.getElementById('jitsiToggleMiniBtn');
+  const miniBtn = getEl('jitsiToggleMiniBtn');
   if (miniBtn) {
     miniBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -631,7 +663,7 @@
   });
   toggleBtn.addEventListener('pointercancel', stopDrag);
 
-  document.getElementById('jitsiCloseBtn').addEventListener('click', () => {
+  safeOn('jitsiCloseBtn', 'click', () => {
     sidebar.classList.remove('open');
     toggleBtn.classList.remove('sidebar-open');
   });
@@ -644,41 +676,52 @@
       else tab.classList.remove('active');
     });
 
-    document.getElementById('jitsiRecordingTab').style.display = targetTab === 'recording' ? 'block' : 'none';
-    document.getElementById('jitsiNotesTab').style.display = targetTab === 'notes' ? 'block' : 'none';
-    document.getElementById('jitsiSettingsTab').style.display = targetTab === 'settings' ? 'block' : 'none';
+    const recTab = getEl('jitsiRecordingTab');
+    if (recTab) recTab.style.display = targetTab === 'recording' ? 'block' : 'none';
+    const notesTab = getEl('jitsiNotesTab');
+    if (notesTab) notesTab.style.display = targetTab === 'notes' ? 'block' : 'none';
+    const setTab = getEl('jitsiSettingsTab');
+    if (setTab) setTab.style.display = targetTab === 'settings' ? 'block' : 'none';
   }
 
   tabBtns.forEach(t => {
     t.addEventListener('click', () => switchTab(t.dataset.tab));
   });
 
-  document.getElementById('jitsiSwitchAccBtn').addEventListener('click', () => {
+  safeOn('jitsiSwitchAccBtn', 'click', () => {
     switchTab('settings');
   });
 
   // Account Management UI Selectors (Matching HTML IDs)
-  const emailInput = document.getElementById('jitsiAccEmailInput');
-  const nameInput = document.getElementById('jitsiAccNameInput');
-  const folderInput = document.getElementById('jitsiAccFolderInput');
-  const webhookInput = document.getElementById('jitsiAccWebhookInput');
-  const tokenInput = document.getElementById('jitsiAccTokenInput');
-  const geminiInput = document.getElementById('jitsiGeminiKeyInput');
-  const pill0 = document.getElementById('jitsiAccountPill0');
-  const pill1 = document.getElementById('jitsiAccountPill1');
-  const driveAccStatus = document.getElementById('jitsiDriveAccStatus');
+  function getSettingsInputs() {
+    return {
+      emailInput: getEl('jitsiAccEmailInput'),
+      nameInput: getEl('jitsiAccNameInput'),
+      folderInput: getEl('jitsiAccFolderInput'),
+      webhookInput: getEl('jitsiAccWebhookInput'),
+      tokenInput: getEl('jitsiAccTokenInput'),
+      geminiInput: getEl('jitsiGeminiKeyInput'),
+      pill0: getEl('jitsiAccountPill0'),
+      pill1: getEl('jitsiAccountPill1'),
+      driveAccStatus: getEl('jitsiDriveAccStatus')
+    };
+  }
 
   function updateDriveHeader() {
     const active = accounts[activeAccIdx] || accounts[0];
-    document.getElementById('jitsiDriveAccName').textContent = active.name;
-    const emailDisp = document.getElementById('jitsiDriveEmailDisplay');
-    const isConnected = Boolean(active.webhookUrl || active.token || active.clientSecret);
-    emailDisp.innerHTML = active.clientId 
-      ? `(${active.clientId}) ${isConnected ? '<span style="color:#34d399;">● Cloud Connected</span>' : '<span style="color:#f59e0b;">○ Local Mode</span>'}`
-      : '(No email configured)';
+    const nameEl = getEl('jitsiDriveAccName');
+    if (nameEl) nameEl.textContent = active.name;
+    const emailDisp = getEl('jitsiDriveEmailDisplay');
+    if (emailDisp) {
+      const isConnected = Boolean(active.webhookUrl || active.token || active.clientSecret);
+      emailDisp.innerHTML = active.clientId 
+        ? `(${active.clientId}) ${isConnected ? '<span style="color:#34d399;">● Cloud Connected</span>' : '<span style="color:#f59e0b;">○ Local Mode</span>'}`
+        : '(No email configured)';
+    }
   }
 
   function updateAccountStatusBadge(acc) {
+    const driveAccStatus = getEl('jitsiDriveAccStatus');
     if (!driveAccStatus) return;
     if (acc.webhookUrl && acc.webhookUrl.startsWith('http')) {
       driveAccStatus.innerHTML = `<span style="color:#34d399; font-weight:600;">✓ Connected via Google Apps Script Webhook</span>`;
@@ -694,6 +737,7 @@
     const acc = accounts[idx];
     if (!acc) return;
 
+    const { emailInput, nameInput, folderInput, webhookInput, tokenInput, geminiInput, pill0, pill1 } = getSettingsInputs();
     if (emailInput) emailInput.value = acc.clientId || '';
     if (nameInput) nameInput.value = acc.name || `Account ${idx + 1}`;
     if (folderInput) folderInput.value = acc.folderName || 'Jitsi_Meetings';
@@ -704,15 +748,18 @@
     if (pill0) pill0.classList.toggle('active', idx === 0);
     if (pill1) pill1.classList.toggle('active', idx === 1);
 
-    document.getElementById('jitsiEditingLabel').textContent = `Editing Account ${idx + 1}`;
-    document.getElementById('jitsiActiveBadge').style.display = idx === activeAccIdx ? 'inline' : 'none';
+    const editLabel = getEl('jitsiEditingLabel');
+    if (editLabel) editLabel.textContent = `Editing Account ${idx + 1}`;
+    const activeBadge = getEl('jitsiActiveBadge');
+    if (activeBadge) activeBadge.style.display = idx === activeAccIdx ? 'inline' : 'none';
     updateAccountStatusBadge(acc);
   }
 
-  if (pill0) pill0.addEventListener('click', () => loadAccountToForm(0));
-  if (pill1) pill1.addEventListener('click', () => loadAccountToForm(1));
+  safeOn('jitsiAccountPill0', 'click', () => loadAccountToForm(0));
+  safeOn('jitsiAccountPill1', 'click', () => loadAccountToForm(1));
 
-  document.getElementById('jitsiSaveAccountBtn').addEventListener('click', () => {
+  safeOn('jitsiSaveAccountBtn', 'click', () => {
+    const { emailInput, nameInput, folderInput, webhookInput, tokenInput } = getSettingsInputs();
     const email = emailInput ? emailInput.value.trim() : '';
     if (!email) {
       showToast('Please enter your Google / Gmail ID', true);
@@ -733,41 +780,44 @@
     showToast(`Saved ${accounts[editingAccIdx].name}!`);
   });
 
-  document.getElementById('jitsiMakeActiveBtn').addEventListener('click', () => {
+  safeOn('jitsiMakeActiveBtn', 'click', () => {
     activeAccIdx = editingAccIdx;
     saveSettings();
     updateDriveHeader();
-    document.getElementById('jitsiActiveBadge').style.display = 'inline';
+    const activeBadge = getEl('jitsiActiveBadge');
+    if (activeBadge) activeBadge.style.display = 'inline';
     showToast(`Switched active Drive to ${accounts[activeAccIdx].name}`);
   });
 
   function updateAiKeyDisplay() {
     const hasKey = Boolean(geminiApiKey && geminiApiKey.trim());
     
-    const settingsStatus = document.getElementById('jitsiSettingsKeyStatus');
+    const settingsStatus = getEl('jitsiSettingsKeyStatus');
     if (settingsStatus) {
       settingsStatus.innerHTML = hasKey 
         ? '<span style="color:#34d399; font-size:11px; font-weight:600;">✓ Saved in browser storage & ready</span>'
         : '<span style="color:#94a3b8; font-size:11px;">(No key saved - using built-in NLP minutes)</span>';
     }
 
-    const quickStatus = document.getElementById('jitsiQuickKeyStatus');
+    const quickStatus = getEl('jitsiQuickKeyStatus');
     if (quickStatus) {
       quickStatus.innerHTML = hasKey
         ? '<span style="color:#34d399;">✓ Gemini Flash Active & Saved</span>'
         : '<span style="color:#f59e0b;">⚠️ Enter Gemini API key to enable speech-to-text</span>';
     }
 
+    const geminiInput = getEl('jitsiGeminiKeyInput');
     if (geminiInput && geminiInput.value !== (geminiApiKey || '')) {
       geminiInput.value = geminiApiKey || '';
     }
-    const quickInput = document.getElementById('jitsiQuickGeminiKey');
+    const quickInput = getEl('jitsiQuickGeminiKey');
     if (quickInput && quickInput.value !== (geminiApiKey || '')) {
       quickInput.value = geminiApiKey || '';
     }
   }
 
   // Auto-save on typing or pasting in Settings tab
+  const geminiInput = getEl('jitsiGeminiKeyInput');
   if (geminiInput) {
     const handleSettingsKeyChange = () => {
       geminiApiKey = geminiInput.value.trim();
@@ -780,7 +830,7 @@
   }
 
   // Auto-save on typing or pasting in Notes tab quick input
-  const quickKeyInput = document.getElementById('jitsiQuickGeminiKey');
+  const quickKeyInput = getEl('jitsiQuickGeminiKey');
   if (quickKeyInput) {
     const handleQuickKeyChange = () => {
       geminiApiKey = quickKeyInput.value.trim();
@@ -792,8 +842,9 @@
     quickKeyInput.addEventListener('paste', () => setTimeout(handleQuickKeyChange, 40));
   }
 
-  document.getElementById('jitsiSaveAiKeyBtn').addEventListener('click', () => {
-    geminiApiKey = geminiInput.value.trim();
+  safeOn('jitsiSaveAiKeyBtn', 'click', () => {
+    const gInput = getEl('jitsiGeminiKeyInput');
+    geminiApiKey = gInput ? gInput.value.trim() : '';
     saveSettings();
     updateAiKeyDisplay();
     showToast(geminiApiKey ? '✅ Gemini API Key saved for all future meetings!' : 'Cleared AI Key');
@@ -1169,7 +1220,7 @@
     showToast(`Recording stopped. Captured ${speechSegments.length} clean speech chunks.`);
   }
 
-  document.getElementById('jitsiToggleRecordBtn').addEventListener('click', () => {
+  safeOn('jitsiToggleRecordBtn', 'click', () => {
     if (isRecording) {
       stopRecording();
       // Switch to notes tab and generate summary
@@ -1456,7 +1507,7 @@
   // --------------------------------------------------------------------------
   // Direct Action & Download Button Handlers
   // --------------------------------------------------------------------------
-  document.getElementById('jitsiDirectDownloadAudioBtn').addEventListener('click', () => {
+  safeOn('jitsiDirectDownloadAudioBtn', 'click', () => {
     if (compiledAudioBlob && compiledAudioBlob.size > 0) {
       const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
       const timestamp = new Date().toISOString().slice(0, 10);
@@ -1467,7 +1518,7 @@
     }
   });
 
-  document.getElementById('jitsiDirectDownloadNotesBtn').addEventListener('click', () => {
+  safeOn('jitsiDirectDownloadNotesBtn', 'click', () => {
     if (meetingSummaryMarkdown) {
       const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
       const timestamp = new Date().toISOString().slice(0, 10);
@@ -1478,8 +1529,8 @@
     }
   });
 
-  document.getElementById('jitsiCopyTranscriptBtn').addEventListener('click', () => {
-    const tBox = document.getElementById('jitsiTranscriptBox');
+  safeOn('jitsiCopyTranscriptBtn', 'click', () => {
+    const tBox = getEl('jitsiTranscriptBox');
     if (tBox) {
       navigator.clipboard.writeText(tBox.innerText).then(() => {
         showToast('📋 Copied full transcript to clipboard!');
@@ -1490,8 +1541,8 @@
   });
 
   // On-demand AI Transcribe button inside Notes tab
-  document.getElementById('jitsiRunAiTranscribeBtn').addEventListener('click', async () => {
-    const keyInput = document.getElementById('jitsiQuickGeminiKey');
+  safeOn('jitsiRunAiTranscribeBtn', 'click', async () => {
+    const keyInput = getEl('jitsiQuickGeminiKey');
     const key = (keyInput ? keyInput.value.trim() : '') || geminiApiKey;
 
     if (!key) {
@@ -1507,9 +1558,11 @@
     geminiApiKey = key;
     saveSettings();
 
-    const runBtn = document.getElementById('jitsiRunAiTranscribeBtn');
-    runBtn.textContent = '⏳ Transcribing...';
-    runBtn.disabled = true;
+    const runBtn = getEl('jitsiRunAiTranscribeBtn');
+    if (runBtn) {
+      runBtn.textContent = '⏳ Transcribing...';
+      runBtn.disabled = true;
+    }
 
     try {
       showToast('Sending clean audio to Gemini 1.5 Flash for transcription...');
@@ -1518,7 +1571,7 @@
       meetingSummaryMarkdown = aiResult.markdown;
       renderMeetingNotes(aiResult.decisions, aiResult.actions, aiResult.transcriptText);
 
-      const aiBox = document.getElementById('jitsiAiTranscribeBox');
+      const aiBox = getEl('jitsiAiTranscribeBox');
       if (aiBox) {
         aiBox.innerHTML = `
           <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1531,8 +1584,10 @@
     } catch (err) {
       console.error('Gemini transcription failed:', err);
       showToast('Gemini transcription error: check API key or network', true);
-      runBtn.textContent = '🚀 Transcribe Now';
-      runBtn.disabled = false;
+      if (runBtn) {
+        runBtn.textContent = '🚀 Transcribe Now';
+        runBtn.disabled = false;
+      }
     }
   });
 
@@ -1553,12 +1608,12 @@
     }, 500);
   }
 
-  document.getElementById('jitsiTranscribeBtn').addEventListener('click', () => {
+  safeOn('jitsiTranscribeBtn', 'click', () => {
     switchTab('notes');
     generatePostMeetingTranscription();
   });
 
-  document.getElementById('jitsiUploadBtn').addEventListener('click', async () => {
+  safeOn('jitsiUploadBtn', 'click', async () => {
     const acc = accounts[activeAccIdx] || accounts[0];
     const timestamp = new Date().toISOString().slice(0, 10);
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
@@ -1570,17 +1625,19 @@
       await generatePostMeetingTranscription();
     }
 
-    const uploadBox = document.getElementById('jitsiUploadBox');
-    const progressBar = document.getElementById('jitsiUploadProgressBar');
-    const statusText = document.getElementById('jitsiUploadStatusText');
-    const actionsArea = document.getElementById('jitsiUploadActions');
-    const openDriveLink = document.getElementById('jitsiOpenDriveLink');
+    const uploadBox = getEl('jitsiUploadBox');
+    const progressBar = getEl('jitsiUploadProgressBar');
+    const statusText = getEl('jitsiUploadStatusText');
+    const actionsArea = getEl('jitsiUploadActions');
+    const openDriveLink = getEl('jitsiOpenDriveLink');
 
-    uploadBox.style.display = 'block';
-    actionsArea.style.display = 'none';
-    progressBar.style.backgroundColor = '#10b981';
-    progressBar.style.width = '10%';
-    statusText.textContent = `Preparing meeting package for Google Drive (${acc.name})...`;
+    if (uploadBox) uploadBox.style.display = 'block';
+    if (actionsArea) actionsArea.style.display = 'none';
+    if (progressBar) {
+      progressBar.style.backgroundColor = '#10b981';
+      progressBar.style.width = '10%';
+    }
+    if (statusText) statusText.textContent = `Preparing meeting package for Google Drive (${acc.name})...`;
 
     // 1. Guaranteed Local Preservation: trigger browser downloads immediately so data is NEVER lost
     if (compiledAudioBlob && compiledAudioBlob.size > 0) {
@@ -1607,57 +1664,64 @@
         markdownText: meetingSummaryMarkdown,
         markdownFileName: markdownFileName,
         onProgress: (pct, msg) => {
-          progressBar.style.width = `${pct}%`;
-          statusText.textContent = msg;
+          if (progressBar) progressBar.style.width = `${pct}%`;
+          if (statusText) statusText.textContent = msg;
         }
       });
 
       if (result.success) {
-        progressBar.style.width = '100%';
+        if (progressBar) progressBar.style.width = '100%';
         const folderUrl = result.folderUrl || 'https://drive.google.com/drive/my-drive';
-        statusText.innerHTML = `✅ <strong>Success!</strong> Audio &amp; notes uploaded to your Google Drive folder: <code>${escapeHtml(acc.folderName)}</code>.`;
+        if (statusText) statusText.innerHTML = `✅ <strong>Success!</strong> Audio &amp; notes uploaded to your Google Drive folder: <code>${escapeHtml(acc.folderName)}</code>.`;
         if (openDriveLink) {
           openDriveLink.href = folderUrl;
           openDriveLink.textContent = '📂 Open Folder in Google Drive';
           openDriveLink.style.display = 'block';
         }
-        actionsArea.style.display = 'flex';
+        if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Successfully uploaded to Google Drive (${acc.name})!`);
       } else if (result.isUnconfigured) {
         // Honest, transparent feedback when cloud credentials are missing
-        progressBar.style.width = '100%';
-        progressBar.style.backgroundColor = '#f59e0b';
-        statusText.innerHTML = `
-          <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (Drive Unconnected)</div>
-          <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
-            Audio &amp; notes downloaded to your computer, but <strong>Google Drive is not connected yet</strong>.
-          </div>
-          <div style="font-size:10px; color:#94a3b8;">
-            Go to <strong>Settings (⚙️)</strong> &gt; enter your Google Apps Script Webhook or OAuth Token to enable cloud sync.
-          </div>
-        `;
+        if (progressBar) {
+          progressBar.style.width = '100%';
+          progressBar.style.backgroundColor = '#f59e0b';
+        }
+        if (statusText) {
+          statusText.innerHTML = `
+            <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (Drive Unconnected)</div>
+            <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
+              Audio &amp; notes downloaded to your computer, but <strong>Google Drive is not connected yet</strong>.
+            </div>
+            <div style="font-size:10px; color:#94a3b8;">
+              Go to <strong>Settings (⚙️)</strong> &gt; enter your Google Apps Script Webhook or OAuth Token to enable cloud sync.
+            </div>
+          `;
+        }
         if (openDriveLink) {
           openDriveLink.style.display = 'none';
         }
-        actionsArea.style.display = 'flex';
+        if (actionsArea) actionsArea.style.display = 'flex';
         showToast('⚠️ Files saved locally. Please connect Google Drive in Settings.', true);
       } else {
         throw new Error(result.error || 'Upload failed');
       }
     } catch (err) {
-      progressBar.style.width = '100%';
-      progressBar.style.backgroundColor = '#ef4444';
-      statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${escapeHtml(err.message || err.toString())}. Local backup files downloaded.`;
-      actionsArea.style.display = 'flex';
+      if (progressBar) {
+        progressBar.style.width = '100%';
+        progressBar.style.backgroundColor = '#ef4444';
+      }
+      if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${escapeHtml(err.message || err.toString())}. Local backup files downloaded.`;
+      if (actionsArea) actionsArea.style.display = 'flex';
       showToast(`Drive upload failed: ${err.message}`, true);
     }
   });
 
-  document.getElementById('jitsiCloseUploadBox').addEventListener('click', () => {
-    document.getElementById('jitsiUploadBox').style.display = 'none';
+  safeOn('jitsiCloseUploadBox', 'click', () => {
+    const uploadBox = getEl('jitsiUploadBox');
+    if (uploadBox) uploadBox.style.display = 'none';
   });
 
-  document.getElementById('jitsiDownloadAudioBtn').addEventListener('click', () => {
+  safeOn('jitsiDownloadAudioBtn', 'click', () => {
     if (compiledAudioBlob) {
       triggerDownload(compiledAudioBlob, `Meeting_Audio_${Date.now()}.webm`, 'audio/webm');
     } else {
@@ -1665,7 +1729,7 @@
     }
   });
 
-  document.getElementById('jitsiDownloadMdBtn').addEventListener('click', () => {
+  safeOn('jitsiDownloadMdBtn', 'click', () => {
     if (meetingSummaryMarkdown) {
       triggerDownload(meetingSummaryMarkdown, `Meeting_Summary_${Date.now()}.md`, 'text/markdown');
     }
@@ -1786,7 +1850,7 @@
   });
 
   // Manual checkpoint button handler
-  document.getElementById('jitsiManualCheckpointBtn')?.addEventListener('click', () => {
+  safeOn('jitsiManualCheckpointBtn', 'click', () => {
     if (isRecording && mediaRecorder && mediaRecorder.state === 'recording') {
       mediaRecorder.requestData();
     }
@@ -1800,14 +1864,14 @@
   // Global Test Hook for Playwright
   // --------------------------------------------------------------------------
   window.__jitsiMeetingRecorder = {
-    start: () => document.getElementById('jitsiToggleRecordBtn').click(),
-    stop: () => document.getElementById('jitsiToggleRecordBtn').click(),
+    start: () => getEl('jitsiToggleRecordBtn')?.click(),
+    stop: () => getEl('jitsiToggleRecordBtn')?.click(),
     getChunks: () => speechSegments,
     getAudioStats: () => ({ activeSpeechSec: activeSpeechDurationSec, silenceSec: silenceDurationSec }),
     getAccounts: () => accounts,
     switchAccount: (idx) => loadAccountToForm(idx),
-    makeActive: () => document.getElementById('jitsiMakeActiveBtn').click(),
-    upload: () => document.getElementById('jitsiUploadBtn').click()
+    makeActive: () => getEl('jitsiMakeActiveBtn')?.click(),
+    upload: () => getEl('jitsiUploadBtn')?.click()
   };
 
   console.log('[Jitsi Meeting Audio Recorder] Fully initialized with Fault-Tolerant Audio Vault.');
