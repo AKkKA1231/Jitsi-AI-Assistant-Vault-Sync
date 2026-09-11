@@ -615,19 +615,16 @@
   }
 
   // Minimize / compact toggle button
-  const miniBtn = getEl('jitsiToggleMiniBtn');
-  if (miniBtn) {
-    miniBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isCompact = toggleBtn.classList.toggle('compact');
-      setStorageItem('jitsi_toggle_compact', isCompact ? '1' : '0');
-    });
-  }
+  safeOn('jitsiToggleMiniBtn', 'click', (e) => {
+    e.stopPropagation();
+    const isCompact = toggleBtn.classList.toggle('compact');
+    setStorageItem('jitsi_toggle_compact', isCompact ? '1' : '0');
+  });
   if (getStorageItem('jitsi_toggle_compact') === '1') {
     toggleBtn.classList.add('compact');
   }
 
-  toggleBtn.addEventListener('pointerdown', (e) => {
+  safeOn(toggleBtn, 'pointerdown', (e) => {
     isDragging = true;
     hasMoved = false;
     dragStartY = e.clientY;
@@ -635,7 +632,7 @@
     try { toggleBtn.setPointerCapture(e.pointerId); } catch (err) {}
   });
 
-  toggleBtn.addEventListener('pointermove', (e) => {
+  safeOn(toggleBtn, 'pointermove', (e) => {
     if (!isDragging) return;
     const deltaY = dragStartY - e.clientY;
     if (Math.abs(deltaY) > 5) {
@@ -653,7 +650,7 @@
     isDragging = false;
   };
 
-  toggleBtn.addEventListener('pointerup', (e) => {
+  safeOn(toggleBtn, 'pointerup', (e) => {
     stopDrag();
     if (!hasMoved) {
       // Normal click: open sidebar and hide floating button to prevent obstruction
@@ -661,7 +658,7 @@
       toggleBtn.classList.add('sidebar-open');
     }
   });
-  toggleBtn.addEventListener('pointercancel', stopDrag);
+  safeOn(toggleBtn, 'pointercancel', stopDrag);
 
   safeOn('jitsiCloseBtn', 'click', () => {
     sidebar.classList.remove('open');
@@ -685,7 +682,7 @@
   }
 
   tabBtns.forEach(t => {
-    t.addEventListener('click', () => switchTab(t.dataset.tab));
+    safeOn(t, 'click', () => switchTab(t.dataset.tab));
   });
 
   safeOn('jitsiSwitchAccBtn', 'click', () => {
@@ -817,29 +814,39 @@
   }
 
   // Auto-save on typing or pasting in Settings tab
-  const geminiInput = getEl('jitsiGeminiKeyInput');
-  if (geminiInput) {
-    const handleSettingsKeyChange = () => {
-      geminiApiKey = geminiInput.value.trim();
+  const handleSettingsKeyChange = () => {
+    const gInput = getEl('jitsiGeminiKeyInput');
+    if (gInput) {
+      geminiApiKey = gInput.value.trim();
       saveSettings();
       updateAiKeyDisplay();
-    };
-    geminiInput.addEventListener('input', handleSettingsKeyChange);
-    geminiInput.addEventListener('change', handleSettingsKeyChange);
-    geminiInput.addEventListener('paste', () => setTimeout(handleSettingsKeyChange, 40));
+    }
+  };
+  safeOn('jitsiGeminiKeyInput', 'input', handleSettingsKeyChange);
+  safeOn('jitsiGeminiKeyInput', 'change', handleSettingsKeyChange);
+  const geminiSettingsEl = getEl('jitsiGeminiKeyInput');
+  if (geminiSettingsEl && typeof geminiSettingsEl.addEventListener === 'function') {
+    geminiSettingsEl.addEventListener('paste', () => setTimeout(handleSettingsKeyChange, 40));
+  } else {
+    safeOn('jitsiGeminiKeyInput', 'paste', () => setTimeout(handleSettingsKeyChange, 40));
   }
 
   // Auto-save on typing or pasting in Notes tab quick input
-  const quickKeyInput = getEl('jitsiQuickGeminiKey');
-  if (quickKeyInput) {
-    const handleQuickKeyChange = () => {
-      geminiApiKey = quickKeyInput.value.trim();
+  const handleQuickKeyChange = () => {
+    const qInput = getEl('jitsiQuickGeminiKey');
+    if (qInput) {
+      geminiApiKey = qInput.value.trim();
       saveSettings();
       updateAiKeyDisplay();
-    };
-    quickKeyInput.addEventListener('input', handleQuickKeyChange);
-    quickKeyInput.addEventListener('change', handleQuickKeyChange);
-    quickKeyInput.addEventListener('paste', () => setTimeout(handleQuickKeyChange, 40));
+    }
+  };
+  safeOn('jitsiQuickGeminiKey', 'input', handleQuickKeyChange);
+  safeOn('jitsiQuickGeminiKey', 'change', handleQuickKeyChange);
+  const quickKeyEl = getEl('jitsiQuickGeminiKey');
+  if (quickKeyEl && typeof quickKeyEl.addEventListener === 'function') {
+    quickKeyEl.addEventListener('paste', () => setTimeout(handleQuickKeyChange, 40));
+  } else {
+    safeOn('jitsiQuickGeminiKey', 'paste', () => setTimeout(handleQuickKeyChange, 40));
   }
 
   safeOn('jitsiSaveAiKeyBtn', 'click', () => {
@@ -1774,19 +1781,19 @@
         </div>
       `;
 
-      document.getElementById('jitsiDismissRecoveryBtn')?.addEventListener('click', () => {
+      safeOn('jitsiDismissRecoveryBtn', 'click', () => {
         deleteVaultSession(latest.id);
         area.innerHTML = '';
         showToast('Dismissed recovered recording.');
       });
 
-      document.getElementById('jitsiDownloadRecoveredBtn')?.addEventListener('click', () => {
+      safeOn('jitsiDownloadRecoveredBtn', 'click', () => {
         const recoveredBlob = new Blob(latest.chunks.map(c => c.data), { type: 'audio/webm' });
         triggerDownload(recoveredBlob, `Meeting_Audio_RECOVERED_${latest.roomName}_${Date.now()}.webm`, 'audio/webm');
         showToast('🎵 Recovered meeting audio downloaded!');
       });
 
-      document.getElementById('jitsiTranscribeRecoveredBtn')?.addEventListener('click', async () => {
+      safeOn('jitsiTranscribeRecoveredBtn', 'click', async () => {
         const activeAiKey = geminiApiKey || DEFAULT_GEMINI_KEY;
         const recoveredBlob = new Blob(latest.chunks.map(c => c.data), { type: 'audio/webm' });
         compiledAudioBlob = recoveredBlob;
