@@ -306,11 +306,13 @@
   // Floating Toggle Button (Labeled as AI Assistant & Meeting Notes)
   const toggleBtn = document.createElement('button');
   toggleBtn.id = 'jitsi-ai-toggle-btn';
+  toggleBtn.title = "Click to open AI Assistant. Drag up/down to reposition.";
   toggleBtn.innerHTML = `
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="flex-shrink:0;">
       <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/>
     </svg>
-    <span>AI Assistant & Meeting Notes</span>
+    <span id="jitsiToggleText" style="white-space:nowrap;">AI Assistant & Meeting Notes</span>
+    <span id="jitsiToggleMiniBtn" title="Minimize / Expand" style="opacity:0.75; font-size:11px; padding:0 3px; cursor:pointer; line-height:1; font-weight:700;">–</span>
   `;
 
   // Sidebar Drawer
@@ -484,8 +486,21 @@
         <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google / Gmail ID:</label>
         <input type="email" id="jitsiAccEmailInput" placeholder="your.name@gmail.com" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
         
-        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Drive Target Folder:</label>
-        <input type="text" id="jitsiAccFolderInput" placeholder="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:12px;">
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Drive Target Folder Name:</label>
+        <input type="text" id="jitsiAccFolderInput" placeholder="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:12px; margin-bottom:8px;">
+
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google Apps Script Webhook URL (Recommended):</label>
+        <input type="url" id="jitsiAccWebhookInput" placeholder="https://script.google.com/macros/s/.../exec" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:4px;">
+        <div style="font-size:10px; color:#94a3b8; line-height:1.4; margin-bottom:8px;">
+          🚀 Paste your Apps Script Web App URL for instant Drive uploads without GCP complexity. <a href="https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync/blob/main/GOOGLE_DRIVE_SETUP_GUIDE.md" target="_blank" style="color:#818cf8;">Setup Guide (60s)</a>
+        </div>
+
+        <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Or Google OAuth2 Access Token (Optional):</label>
+        <input type="password" id="jitsiAccTokenInput" placeholder="ya29.a0Ac..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:6px;">
+
+        <div id="jitsiDriveAccStatus" style="margin-bottom:10px; font-size:11px;">
+          <!-- dynamic status indicator -->
+        </div>
 
         <div style="display:flex; gap:8px;">
           <button id="jitsiSaveAccountBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1;">💾 Save Account</button>
@@ -554,13 +569,71 @@
     }, 4000);
   }
 
-  // Toggle Sidebar
-  toggleBtn.addEventListener('click', () => {
-    sidebar.classList.toggle('open');
+  // ----------------------------------------------------
+  // Floating Toggle Button Dragging & Visibility State
+  // ----------------------------------------------------
+  let isDragging = false;
+  let dragStartY = 0;
+  let initialBottom = 120;
+  let hasMoved = false;
+
+  const savedBottom = getStorageItem('jitsi_toggle_bottom');
+  if (savedBottom) {
+    toggleBtn.style.bottom = `${savedBottom}px`;
+  }
+
+  // Minimize / compact toggle button
+  const miniBtn = document.getElementById('jitsiToggleMiniBtn');
+  if (miniBtn) {
+    miniBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isCompact = toggleBtn.classList.toggle('compact');
+      setStorageItem('jitsi_toggle_compact', isCompact ? '1' : '0');
+    });
+  }
+  if (getStorageItem('jitsi_toggle_compact') === '1') {
+    toggleBtn.classList.add('compact');
+  }
+
+  toggleBtn.addEventListener('pointerdown', (e) => {
+    isDragging = true;
+    hasMoved = false;
+    dragStartY = e.clientY;
+    initialBottom = parseInt(window.getComputedStyle(toggleBtn).bottom, 10) || 120;
+    try { toggleBtn.setPointerCapture(e.pointerId); } catch (err) {}
   });
+
+  toggleBtn.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    const deltaY = dragStartY - e.clientY;
+    if (Math.abs(deltaY) > 5) {
+      hasMoved = true;
+      const newBottom = Math.max(30, Math.min(window.innerHeight - 70, initialBottom + deltaY));
+      toggleBtn.style.bottom = `${newBottom}px`;
+    }
+  });
+
+  const stopDrag = () => {
+    if (isDragging && hasMoved) {
+      const curBottom = parseInt(toggleBtn.style.bottom, 10);
+      setStorageItem('jitsi_toggle_bottom', String(curBottom));
+    }
+    isDragging = false;
+  };
+
+  toggleBtn.addEventListener('pointerup', (e) => {
+    stopDrag();
+    if (!hasMoved) {
+      // Normal click: open sidebar and hide floating button to prevent obstruction
+      sidebar.classList.add('open');
+      toggleBtn.classList.add('sidebar-open');
+    }
+  });
+  toggleBtn.addEventListener('pointercancel', stopDrag);
 
   document.getElementById('jitsiCloseBtn').addEventListener('click', () => {
     sidebar.classList.remove('open');
+    toggleBtn.classList.remove('sidebar-open');
   });
 
   // Tab switching
@@ -584,19 +657,36 @@
     switchTab('settings');
   });
 
-  // Account Management UI
-  const emailInput = document.getElementById('jitsiEmailInput');
-  const nameInput = document.getElementById('jitsiNameInput');
-  const folderInput = document.getElementById('jitsiFolderInput');
+  // Account Management UI Selectors (Matching HTML IDs)
+  const emailInput = document.getElementById('jitsiAccEmailInput');
+  const nameInput = document.getElementById('jitsiAccNameInput');
+  const folderInput = document.getElementById('jitsiAccFolderInput');
+  const webhookInput = document.getElementById('jitsiAccWebhookInput');
+  const tokenInput = document.getElementById('jitsiAccTokenInput');
   const geminiInput = document.getElementById('jitsiGeminiKeyInput');
-  const pill0 = document.getElementById('jitsiPill0');
-  const pill1 = document.getElementById('jitsiPill1');
+  const pill0 = document.getElementById('jitsiAccountPill0');
+  const pill1 = document.getElementById('jitsiAccountPill1');
+  const driveAccStatus = document.getElementById('jitsiDriveAccStatus');
 
   function updateDriveHeader() {
     const active = accounts[activeAccIdx] || accounts[0];
     document.getElementById('jitsiDriveAccName').textContent = active.name;
     const emailDisp = document.getElementById('jitsiDriveEmailDisplay');
-    emailDisp.textContent = active.clientId ? `(${active.clientId})` : '(No email configured)';
+    const isConnected = Boolean(active.webhookUrl || active.token || active.clientSecret);
+    emailDisp.innerHTML = active.clientId 
+      ? `(${active.clientId}) ${isConnected ? '<span style="color:#34d399;">● Cloud Connected</span>' : '<span style="color:#f59e0b;">○ Local Mode</span>'}`
+      : '(No email configured)';
+  }
+
+  function updateAccountStatusBadge(acc) {
+    if (!driveAccStatus) return;
+    if (acc.webhookUrl && acc.webhookUrl.startsWith('http')) {
+      driveAccStatus.innerHTML = `<span style="color:#34d399; font-weight:600;">✓ Connected via Google Apps Script Webhook</span>`;
+    } else if (acc.token || (acc.clientSecret && !acc.clientSecret.includes('•') && acc.clientSecret.length > 20)) {
+      driveAccStatus.innerHTML = `<span style="color:#34d399; font-weight:600;">✓ Connected via Google OAuth2 Access Token</span>`;
+    } else {
+      driveAccStatus.innerHTML = `<span style="color:#f59e0b;">⚠️ Cloud sync unconfigured. Uploads will be saved as local downloads only.</span>`;
+    }
   }
 
   function loadAccountToForm(idx) {
@@ -604,35 +694,43 @@
     const acc = accounts[idx];
     if (!acc) return;
 
-    emailInput.value = acc.clientId || '';
-    nameInput.value = acc.name || `Account ${idx + 1}`;
-    folderInput.value = acc.folderName || 'Jitsi_Meetings';
-    geminiInput.value = geminiApiKey || '';
+    if (emailInput) emailInput.value = acc.clientId || '';
+    if (nameInput) nameInput.value = acc.name || `Account ${idx + 1}`;
+    if (folderInput) folderInput.value = acc.folderName || 'Jitsi_Meetings';
+    if (webhookInput) webhookInput.value = acc.webhookUrl || '';
+    if (tokenInput) tokenInput.value = acc.token || (acc.clientSecret && !acc.clientSecret.includes('•') ? acc.clientSecret : '');
+    if (geminiInput) geminiInput.value = geminiApiKey || '';
 
-    pill0.classList.toggle('active', idx === 0);
-    pill1.classList.toggle('active', idx === 1);
+    if (pill0) pill0.classList.toggle('active', idx === 0);
+    if (pill1) pill1.classList.toggle('active', idx === 1);
 
     document.getElementById('jitsiEditingLabel').textContent = `Editing Account ${idx + 1}`;
     document.getElementById('jitsiActiveBadge').style.display = idx === activeAccIdx ? 'inline' : 'none';
+    updateAccountStatusBadge(acc);
   }
 
-  pill0.addEventListener('click', () => loadAccountToForm(0));
-  pill1.addEventListener('click', () => loadAccountToForm(1));
+  if (pill0) pill0.addEventListener('click', () => loadAccountToForm(0));
+  if (pill1) pill1.addEventListener('click', () => loadAccountToForm(1));
 
   document.getElementById('jitsiSaveAccountBtn').addEventListener('click', () => {
-    const email = emailInput.value.trim();
+    const email = emailInput ? emailInput.value.trim() : '';
     if (!email) {
       showToast('Please enter your Google / Gmail ID', true);
       return;
     }
 
     accounts[editingAccIdx].clientId = email;
-    accounts[editingAccIdx].name = nameInput.value.trim() || `Account ${editingAccIdx + 1}`;
-    accounts[editingAccIdx].folderName = folderInput.value.trim() || 'Jitsi_Meetings';
+    accounts[editingAccIdx].name = (nameInput ? nameInput.value.trim() : '') || `Account ${editingAccIdx + 1}`;
+    accounts[editingAccIdx].folderName = (folderInput ? folderInput.value.trim() : '') || 'Jitsi_Meetings';
+    accounts[editingAccIdx].webhookUrl = webhookInput ? webhookInput.value.trim() : '';
+    const tok = tokenInput ? tokenInput.value.trim() : '';
+    accounts[editingAccIdx].token = tok;
+    accounts[editingAccIdx].clientSecret = tok;
 
     saveSettings();
     updateDriveHeader();
-    showToast(`Saved ${accounts[editingAccIdx].name}: ${email}`);
+    updateAccountStatusBadge(accounts[editingAccIdx]);
+    showToast(`Saved ${accounts[editingAccIdx].name}!`);
   });
 
   document.getElementById('jitsiMakeActiveBtn').addEventListener('click', () => {
@@ -1461,10 +1559,12 @@
   });
 
   document.getElementById('jitsiUploadBtn').addEventListener('click', async () => {
-    const acc = accounts[activeAccIdx];
+    const acc = accounts[activeAccIdx] || accounts[0];
     const timestamp = new Date().toISOString().slice(0, 10);
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
     const filenamePrefix = `${timestamp}_${room}`;
+    const audioFileName = `Meeting_Audio_${filenamePrefix}.webm`;
+    const markdownFileName = `Meeting_Summary_${filenamePrefix}.md`;
 
     if (!meetingSummaryMarkdown) {
       await generatePostMeetingTranscription();
@@ -1474,32 +1574,83 @@
     const progressBar = document.getElementById('jitsiUploadProgressBar');
     const statusText = document.getElementById('jitsiUploadStatusText');
     const actionsArea = document.getElementById('jitsiUploadActions');
+    const openDriveLink = document.getElementById('jitsiOpenDriveLink');
 
     uploadBox.style.display = 'block';
     actionsArea.style.display = 'none';
-    progressBar.style.width = '20%';
-    statusText.textContent = `Connecting to Google Drive (${acc.name})...`;
+    progressBar.style.backgroundColor = '#10b981';
+    progressBar.style.width = '10%';
+    statusText.textContent = `Preparing meeting package for Google Drive (${acc.name})...`;
 
-    await new Promise(r => setTimeout(r, 500));
-    progressBar.style.width = '50%';
-    statusText.textContent = `Uploading clean audio recording (${(compiledAudioBlob?.size / 1024 || 25).toFixed(0)} KB)...`;
-
-    await new Promise(r => setTimeout(r, 600));
-    progressBar.style.width = '80%';
-    statusText.textContent = `Uploading Executive Summary & action items...`;
-
-    // Download clean audio + notes automatically so user never loses them
+    // 1. Guaranteed Local Preservation: trigger browser downloads immediately so data is NEVER lost
     if (compiledAudioBlob && compiledAudioBlob.size > 0) {
-      triggerDownload(compiledAudioBlob, `Meeting_Audio_${filenamePrefix}.webm`, 'audio/webm');
+      triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
     }
-    triggerDownload(meetingSummaryMarkdown, `Meeting_Summary_${filenamePrefix}.md`, 'text/markdown');
+    triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
 
-    await new Promise(r => setTimeout(r, 400));
-    progressBar.style.width = '100%';
-    statusText.innerHTML = `✅ <strong>Success!</strong> Audio & notes uploaded to folder: <code>${escapeHtml(acc.folderName)}</code>. Files also downloaded.`;
-    actionsArea.style.display = 'flex';
+    const creds = {
+      webhookUrl: acc.webhookUrl || '',
+      token: acc.token || (acc.clientSecret && !acc.clientSecret.includes('•') ? acc.clientSecret : '')
+    };
 
-    showToast(`✅ Meeting package uploaded to ${acc.name}!`);
+    try {
+      const uploader = typeof JitsiDriveUploader !== 'undefined' ? JitsiDriveUploader : null;
+      if (!uploader) {
+        throw new Error('Google Drive upload module not loaded');
+      }
+
+      const result = await uploader.uploadPackage({
+        credentials: creds,
+        folderName: acc.folderName || 'Jitsi_Meetings',
+        audioBlob: compiledAudioBlob,
+        audioFileName: audioFileName,
+        markdownText: meetingSummaryMarkdown,
+        markdownFileName: markdownFileName,
+        onProgress: (pct, msg) => {
+          progressBar.style.width = `${pct}%`;
+          statusText.textContent = msg;
+        }
+      });
+
+      if (result.success) {
+        progressBar.style.width = '100%';
+        const folderUrl = result.folderUrl || 'https://drive.google.com/drive/my-drive';
+        statusText.innerHTML = `✅ <strong>Success!</strong> Audio &amp; notes uploaded to your Google Drive folder: <code>${escapeHtml(acc.folderName)}</code>.`;
+        if (openDriveLink) {
+          openDriveLink.href = folderUrl;
+          openDriveLink.textContent = '📂 Open Folder in Google Drive';
+          openDriveLink.style.display = 'block';
+        }
+        actionsArea.style.display = 'flex';
+        showToast(`✅ Successfully uploaded to Google Drive (${acc.name})!`);
+      } else if (result.isUnconfigured) {
+        // Honest, transparent feedback when cloud credentials are missing
+        progressBar.style.width = '100%';
+        progressBar.style.backgroundColor = '#f59e0b';
+        statusText.innerHTML = `
+          <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (Drive Unconnected)</div>
+          <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
+            Audio &amp; notes downloaded to your computer, but <strong>Google Drive is not connected yet</strong>.
+          </div>
+          <div style="font-size:10px; color:#94a3b8;">
+            Go to <strong>Settings (⚙️)</strong> &gt; enter your Google Apps Script Webhook or OAuth Token to enable cloud sync.
+          </div>
+        `;
+        if (openDriveLink) {
+          openDriveLink.style.display = 'none';
+        }
+        actionsArea.style.display = 'flex';
+        showToast('⚠️ Files saved locally. Please connect Google Drive in Settings.', true);
+      } else {
+        throw new Error(result.error || 'Upload failed');
+      }
+    } catch (err) {
+      progressBar.style.width = '100%';
+      progressBar.style.backgroundColor = '#ef4444';
+      statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${escapeHtml(err.message || err.toString())}. Local backup files downloaded.`;
+      actionsArea.style.display = 'flex';
+      showToast(`Drive upload failed: ${err.message}`, true);
+    }
   });
 
   document.getElementById('jitsiCloseUploadBox').addEventListener('click', () => {

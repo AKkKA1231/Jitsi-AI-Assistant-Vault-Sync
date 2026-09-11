@@ -290,6 +290,52 @@ it('Should verify Gemini API Key persistence and auto-save synchronization acros
   assert.ok(popupHtml.includes('id="popupGeminiKeyInput"'), 'popup.html must have dedicated Gemini key input');
 });
 
+it('Should verify floating toggle bar zero-obstruction styling and proper z-index hierarchy', () => {
+  const contentCss = fs.readFileSync(path.resolve('./extension/content.css'), 'utf-8');
+  const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
+
+  // Verify z-index hierarchy: sidebar (1000000) > toggle button (999990)
+  assert.ok(contentCss.includes('z-index: 1000000;'), 'Sidebar must have high z-index (1000000)');
+  assert.ok(contentCss.includes('z-index: 999990;'), 'Toggle button must have lower z-index than sidebar');
+
+  // Verify hiding rules when sidebar is open
+  assert.ok(contentCss.includes('#jitsi-ai-sidebar.open ~ #jitsi-ai-toggle-btn') || contentCss.includes('#jitsi-ai-toggle-btn.sidebar-open'), 'Must hide toggle button when sidebar is open');
+
+  // Verify compact mode styles exist
+  assert.ok(contentCss.includes('#jitsi-ai-toggle-btn.compact'), 'Must support compact minimized toggle mode');
+
+  // Verify drag event listeners in content.js
+  assert.ok(contentJs.includes('pointerdown') && contentJs.includes('pointermove'), 'content.js must implement smooth pointer dragging');
+});
+
+await itAsync('Should verify real Google Drive uploader module supporting Webhook and REST API v3', async () => {
+  await import('./extension/driveUploader.js');
+  const uploader = globalThis.JitsiDriveUploader;
+
+  assert.ok(uploader, 'JitsiDriveUploader must be defined on globalThis');
+  assert.ok(typeof uploader.uploadPackage === 'function', 'uploadPackage must be exported');
+  assert.ok(typeof uploader.uploadViaWebhook === 'function', 'uploadViaWebhook must be exported');
+  assert.ok(typeof uploader.uploadViaGoogleDriveApi === 'function', 'uploadViaGoogleDriveApi must be exported');
+
+  // Test unconfigured credentials handling
+  const unconfiguredResult = await uploader.uploadPackage({
+    credentials: { webhookUrl: '', token: '' },
+    folderName: 'Jitsi_Meetings',
+    audioBlob: null,
+    markdownText: '# Test'
+  });
+
+  assert.strictEqual(unconfiguredResult.success, false, 'Unconfigured credentials must not claim success');
+  assert.strictEqual(unconfiguredResult.isUnconfigured, true, 'Must flag unconfigured status honestly');
+  assert.ok(unconfiguredResult.message.includes('Google Drive is not connected yet'), 'Must provide clear connection guidance');
+
+  // Verify manifest host permissions include Google APIs
+  const manifest = JSON.parse(fs.readFileSync(path.resolve('./extension/manifest.json'), 'utf-8'));
+  assert.ok(manifest.host_permissions.includes('https://www.googleapis.com/*'), 'Must declare googleapis.com in host_permissions');
+  assert.ok(manifest.host_permissions.includes('https://script.google.com/*'), 'Must declare script.google.com in host_permissions');
+  assert.ok(manifest.content_scripts[0].js.includes('driveUploader.js'), 'Must include driveUploader.js in content_scripts');
+});
+
 await itAsync('Should verify live Gemini API connection if key is provided', async () => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) {

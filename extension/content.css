@@ -2,28 +2,51 @@
 
 #jitsi-ai-toggle-btn {
   position: fixed;
-  bottom: 84px;
-  right: 24px;
-  z-index: 999999;
+  bottom: 120px;
+  right: 20px;
+  z-index: 999990;
   background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
   color: #ffffff;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 50px;
-  padding: 10px 18px;
+  padding: 8px 14px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.45);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
   display: flex;
   align-items: center;
-  gap: 8px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  gap: 7px;
+  user-select: none;
+  touch-action: none;
+  transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.2s ease, width 0.2s ease;
 }
 
 #jitsi-ai-toggle-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 30px rgba(99, 102, 241, 0.6);
+  box-shadow: 0 10px 26px rgba(99, 102, 241, 0.6);
+}
+
+/* Hide floating button when sidebar is open or when minimized */
+#jitsi-ai-sidebar.open ~ #jitsi-ai-toggle-btn,
+#jitsi-ai-toggle-btn.sidebar-open,
+#jitsi-ai-toggle-btn.hidden {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateX(120%) scale(0.8) !important;
+}
+
+/* Compact mini-badge mode (when user collapses or on small viewports) */
+#jitsi-ai-toggle-btn.compact {
+  padding: 9px;
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  justify-content: center;
+}
+#jitsi-ai-toggle-btn.compact span {
+  display: none;
 }
 
 #jitsi-ai-sidebar {
@@ -32,7 +55,7 @@
   right: -420px;
   width: 400px;
   height: 100vh;
-  z-index: 999998;
+  z-index: 1000000;
   background: rgba(15, 23, 42, 0.96);
   backdrop-filter: blur(16px);
   border-left: 1px solid rgba(255, 255, 255, 0.1);
