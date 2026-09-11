@@ -1199,37 +1199,47 @@
   }
 
   function stopRecording() {
-    if (periodicCheckpointInterval) {
-      clearInterval(periodicCheckpointInterval);
-      periodicCheckpointInterval = null;
-    }
+    return new Promise((resolve) => {
+      if (periodicCheckpointInterval) {
+        clearInterval(periodicCheckpointInterval);
+        periodicCheckpointInterval = null;
+      }
+      if (vadMonitorInterval) clearInterval(vadMonitorInterval);
 
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      try { mediaRecorder.requestData(); } catch (e) {}
-      mediaRecorder.stop();
-    }
-    if (vadMonitorInterval) clearInterval(vadMonitorInterval);
+      // Stop live speech recognizer
+      stopLiveSTT();
+      isRecording = false;
 
-    // Stop live speech recognizer
-    stopLiveSTT();
+      const dot = getEl('jitsiVadDot');
+      const label = getEl('jitsiVadLabel');
+      if (dot) dot.className = 'jitsi-ai-vad-dot';
+      if (label) label.textContent = 'Completed';
 
-    isRecording = false;
+      const recBtn = getEl('jitsiToggleRecordBtn');
+      if (recBtn) {
+        recBtn.textContent = '🔴 Record Again';
+        recBtn.classList.replace('jitsi-ai-ext-btn-secondary', 'jitsi-ai-ext-btn-primary');
+      }
 
-    const dot = document.getElementById('jitsiVadDot');
-    const label = document.getElementById('jitsiVadLabel');
-    if (dot) dot.className = 'jitsi-ai-vad-dot';
-    if (label) label.textContent = 'Completed';
-
-    const recBtn = document.getElementById('jitsiToggleRecordBtn');
-    recBtn.textContent = '🔴 Record Again';
-    recBtn.classList.replace('jitsi-ai-ext-btn-secondary', 'jitsi-ai-ext-btn-primary');
-
-    showToast(`Recording stopped. Captured ${speechSegments.length} clean speech chunks.`);
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        const handleStop = () => {
+          try { mediaRecorder.removeEventListener('stop', handleStop); } catch (e) {}
+          showToast(`Recording stopped. Captured ${speechSegments.length} clean speech chunks.`);
+          resolve();
+        };
+        mediaRecorder.addEventListener('stop', handleStop);
+        try { mediaRecorder.requestData(); } catch (e) {}
+        try { mediaRecorder.stop(); } catch (e) { resolve(); }
+      } else {
+        showToast(`Recording stopped. Captured ${speechSegments.length} clean speech chunks.`);
+        resolve();
+      }
+    });
   }
 
-  safeOn('jitsiToggleRecordBtn', 'click', () => {
+  safeOn('jitsiToggleRecordBtn', 'click', async () => {
     if (isRecording) {
-      stopRecording();
+      await stopRecording();
       // Switch to notes tab and generate summary
       switchTab('notes');
       generatePostMeetingTranscription();
@@ -1264,8 +1274,19 @@
   let compiledAudioBlob = null;
   let meetingSummaryMarkdown = '';
   let meetingTranscriptJson = '';
+  let activeTranscriptionPromise = null;
 
-  async function generatePostMeetingTranscription() {
+  function generatePostMeetingTranscription() {
+    if (activeTranscriptionPromise) {
+      return activeTranscriptionPromise;
+    }
+    activeTranscriptionPromise = _doGeneratePostMeetingTranscription().finally(() => {
+      activeTranscriptionPromise = null;
+    });
+    return activeTranscriptionPromise;
+  }
+
+  async function _doGeneratePostMeetingTranscription() {
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
     const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -1628,17 +1649,6 @@
     const audioFileName = `Meeting_Audio_${filenamePrefix}.webm`;
     const markdownFileName = `Meeting_Summary_${filenamePrefix}.md`;
 
-    // 1. If call is actively recording, finalize and flush the audio buffers first
-    if (isRecording) {
-      showToast('Finalizing meeting audio before upload...');
-      stopRecording();
-      await new Promise(r => setTimeout(r, 400));
-    }
-
-    if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
-      await generatePostMeetingTranscription();
-    }
-
     const uploadBox = getEl('jitsiUploadBox');
     const progressBar = getEl('jitsiUploadProgressBar');
     const statusText = getEl('jitsiUploadStatusText');
@@ -1651,15 +1661,34 @@
       progressBar.style.backgroundColor = '#10b981';
       progressBar.style.width = '10%';
     }
-    if (statusText) statusText.textContent = `Preparing meeting package for Google Drive (${acc.name})...`;
 
-    // Guaranteed Local Preservation: trigger browser downloads immediately so data is NEVER lost
-    if (compiledAudioBlob && compiledAudioBlob.size > 0) {
-      triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
+    // 1. If call is actively recording, finalize and flush the audio buffers first
+    if (isRecording) {
+      if (statusText) statusText.textContent = 'Finalizing meeting audio before upload...';
+      showToast('Finalizing meeting audio before upload...');
+      await stopRecording();
+      await new Promise(r => setTimeout(r, 250));
     }
-    if (meetingSummaryMarkdown && meetingSummaryMarkdown.trim()) {
-      triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+
+    // 2. Wait for any active AI transcription synthesis already in-flight
+    if (activeTranscriptionPromise) {
+      if (statusText) statusText.textContent = 'Awaiting AI transcription...';
+      await activeTranscriptionPromise;
     }
+
+    // 3. Compile audio & generate summary notes if not yet generated
+    if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
+      if (statusText) statusText.textContent = 'Synthesizing meeting summary...';
+      await generatePostMeetingTranscription();
+    }
+
+    if (progressBar) progressBar.style.width = '25%';
+    if (statusText) statusText.textContent = `Preparing upload package for Google Drive (${acc.name})...`;
+
+    // Note: Do NOT trigger browser downloads here prior to upload!
+    // In Chrome, initiating a file download event before or during an asynchronous fetch
+    // cancels pending network requests with "TypeError: Failed to fetch".
+    // Local backup downloads will occur safely if Drive is unconfigured or returns an error.
 
     const creds = {
       webhookUrl: acc.webhookUrl || '',
@@ -1687,7 +1716,10 @@
       });
 
       if (result.success) {
-        if (progressBar) progressBar.style.width = '100%';
+        if (progressBar) {
+          progressBar.style.width = '100%';
+          progressBar.style.backgroundColor = '#10b981';
+        }
         const folderUrl = result.folderUrl || 'https://drive.google.com/drive/my-drive';
         if (statusText) statusText.innerHTML = `✅ <strong>Success!</strong> Audio &amp; notes uploaded to your Google Drive folder: <code>${escapeHtml(acc.folderName)}</code>.`;
         if (openDriveLink) {
@@ -1698,7 +1730,14 @@
         if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Successfully uploaded to Google Drive (${acc.name})!`);
       } else if (result.isUnconfigured) {
-        // Honest, transparent feedback when cloud credentials are missing
+        // Safe offline preservation: Drive credentials missing, download files locally
+        if (compiledAudioBlob && compiledAudioBlob.size > 0) {
+          triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
+        }
+        if (meetingSummaryMarkdown && meetingSummaryMarkdown.trim()) {
+          triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+        }
+
         if (progressBar) {
           progressBar.style.width = '100%';
           progressBar.style.backgroundColor = '#f59e0b';
@@ -1723,6 +1762,14 @@
         throw new Error(result.error || 'Upload failed');
       }
     } catch (err) {
+      // Safe fallback on error: preserve files locally so the user never loses meeting notes or audio
+      if (compiledAudioBlob && compiledAudioBlob.size > 0) {
+        triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
+      }
+      if (meetingSummaryMarkdown && meetingSummaryMarkdown.trim()) {
+        triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+      }
+
       if (progressBar) {
         progressBar.style.width = '100%';
         progressBar.style.backgroundColor = '#ef4444';

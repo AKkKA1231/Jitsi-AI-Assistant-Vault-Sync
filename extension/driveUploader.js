@@ -216,6 +216,7 @@
 
     // Route via extension background service worker to bypass page CSP on meet.jit.si
     let json = null;
+    let bgServiceWorkerUsed = false;
     if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
       try {
         json = await new Promise((resolve, reject) => {
@@ -228,18 +229,28 @@
               reject(new Error(chrome.runtime.lastError.message));
             } else if (response && response.success) {
               resolve(response.data);
+            } else if (response && response.error) {
+              reject(new Error(response.error));
             } else {
-              reject(new Error(response?.error || 'Background worker upload failed'));
+              reject(new Error('Background worker returned empty response'));
             }
           });
         });
+        bgServiceWorkerUsed = true;
       } catch (bgErr) {
-        console.warn('[Drive Uploader] Background worker upload failed, attempting direct fetch:', bgErr);
+        // If the background service worker responded with an error from Google Apps Script, do not mask it
+        const isConnectionError = bgErr.message.includes('Could not establish connection') ||
+                                  bgErr.message.includes('Receiving end does not exist') ||
+                                  bgErr.message.includes('Extension context invalidated');
+        if (!isConnectionError) {
+          throw bgErr;
+        }
+        console.warn('[Drive Uploader] Background worker unavailable, falling back to direct fetch:', bgErr);
       }
     }
 
-    // Direct fetch fallback for test environments or standalone execution
-    if (!json) {
+    // Direct fetch fallback for test environments or non-extension contexts
+    if (!json && !bgServiceWorkerUsed) {
       const res = await fetch(webhookUrl, {
         method: 'POST',
         headers: {
