@@ -3,7 +3,7 @@
  * Supports Built-in Intelligent NLP, Google Gemini API, and OpenAI GPT
  */
 
-const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || '';
+const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
 export class AiNotesService {
   constructor(options = {}) {

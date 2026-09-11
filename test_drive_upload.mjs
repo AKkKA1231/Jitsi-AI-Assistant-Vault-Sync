@@ -1,0 +1,332 @@
+/**
+ * Automated Test Suite: Google Drive Real Upload Engine & Sync
+ * Tests:
+ * 1. Google Apps Script Webhook Dispatcher & Payload Validation
+ * 2. Google Drive REST API v3 Multipart Payload Construction
+ * 3. Unconfigured Credential Detection & Honest User Feedback
+ * 4. Error Trapping (HTTP 401, Invalid Webhook, Network Timeouts)
+ * 5. Multi-Account Quota Tracking & Hot-Swapping Integration
+ */
+
+import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+
+console.log('🧪 Starting Google Drive Upload Engine Automated Test Suite...\n');
+
+// Mock localStorage for Node test environment
+if (typeof localStorage === 'undefined') {
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => store.get(key) || null,
+    setItem: (key, val) => store.set(key, String(val)),
+    removeItem: (key) => store.delete(key),
+    clear: () => store.clear()
+  };
+}
+
+let passedTests = 0;
+let totalTests = 0;
+
+function it(desc, fn) {
+  totalTests++;
+  try {
+    fn();
+    console.log(`  ✅ PASS: ${desc}`);
+    passedTests++;
+  } catch (err) {
+    console.error(`  ❌ FAIL: ${desc}`);
+    console.error(err);
+    process.exitCode = 1;
+  }
+}
+
+async function itAsync(desc, fn) {
+  totalTests++;
+  try {
+    await fn();
+    console.log(`  ✅ PASS: ${desc}`);
+    passedTests++;
+  } catch (err) {
+    console.error(`  ❌ FAIL: ${desc}`);
+    console.error(err);
+    process.exitCode = 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 1. Module Export & Structure Tests
+// ---------------------------------------------------------------------------
+console.log('--- Test Group 1: Google Drive Uploader Engine Contract ---');
+
+await import('./extension/driveUploader.js');
+const uploader = globalThis.JitsiDriveUploader;
+
+it('Should export all required upload and utility methods', () => {
+  assert.ok(uploader, 'JitsiDriveUploader must be attached to globalThis');
+  assert.strictEqual(typeof uploader.uploadPackage, 'function', 'uploadPackage must be a function');
+  assert.strictEqual(typeof uploader.uploadViaWebhook, 'function', 'uploadViaWebhook must be a function');
+  assert.strictEqual(typeof uploader.uploadViaGoogleDriveApi, 'function', 'uploadViaGoogleDriveApi must be a function');
+  assert.strictEqual(typeof uploader.blobToBase64, 'function', 'blobToBase64 must be a function');
+});
+
+// ---------------------------------------------------------------------------
+// 2. Unconfigured Credentials & Truthful Feedback
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 2: Unconfigured Credentials Safeguard ---');
+
+await itAsync('Should decline upload and report honest unconfigured status when no credentials provided', async () => {
+  const result = await uploader.uploadPackage({
+    credentials: { webhookUrl: '', token: '' },
+    folderName: 'Jitsi_Meetings',
+    audioBlob: null,
+    audioFileName: 'Meeting_Audio_Test.webm',
+    markdownText: '# Meeting Notes',
+    markdownFileName: 'Meeting_Summary_Test.md'
+  });
+
+  assert.strictEqual(result.success, false, 'Must not claim success without credentials');
+  assert.strictEqual(result.isUnconfigured, true, 'isUnconfigured flag must be true');
+  assert.ok(result.message.includes('Google Drive is not connected yet'), 'Must provide clear connection instructions');
+});
+
+// ---------------------------------------------------------------------------
+// 3. Google Apps Script Webhook Protocol Test (Mocked Network)
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 3: Google Apps Script Webhook Flow ---');
+
+await itAsync('Should construct correct payload and process successful Webhook response', async () => {
+  const originalFetch = globalThis.fetch;
+  let interceptedUrl = null;
+  let interceptedBody = null;
+
+  // Mock fetch for Google Apps Script Webhook
+  globalThis.fetch = async (url, options) => {
+    interceptedUrl = url;
+    interceptedBody = JSON.parse(options.body);
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        success: true,
+        folderId: 'folder_abc_123',
+        folderUrl: 'https://drive.google.com/drive/folders/folder_abc_123',
+        audioUrl: 'https://drive.google.com/file/d/audio_xyz/view',
+        notesUrl: 'https://drive.google.com/file/d/notes_xyz/view'
+      })
+    };
+  };
+
+  try {
+    const fakeAudioBlob = new Blob(['FAKE_AUDIO_BYTES_TEST'], { type: 'audio/webm' });
+    const progressLog = [];
+
+    const result = await uploader.uploadPackage({
+      credentials: { webhookUrl: 'https://script.google.com/macros/s/AKfycb_test/exec' },
+      folderName: 'Engineering_Sync',
+      audioBlob: fakeAudioBlob,
+      audioFileName: 'Call_Audio_2026.webm',
+      markdownText: '# Architecture Decisions\n- Adopted Webhook mode',
+      markdownFileName: 'Call_Summary_2026.md',
+      onProgress: (pct, msg) => progressLog.push({ pct, msg })
+    });
+
+    assert.strictEqual(result.success, true, 'Result must be success');
+    assert.strictEqual(result.mode, 'webhook', 'Mode must be webhook');
+    assert.strictEqual(result.folderId, 'folder_abc_123');
+    assert.strictEqual(result.folderUrl, 'https://drive.google.com/drive/folders/folder_abc_123');
+    assert.ok(result.audioUrl.includes('audio_xyz'));
+    assert.ok(result.notesUrl.includes('notes_xyz'));
+
+    // Verify progress callbacks
+    assert.ok(progressLog.length >= 2, 'Must report progress milestones');
+    assert.ok(progressLog.some(p => p.pct === 100), 'Must reach 100% progress');
+
+    // Verify intercepted payload structure
+    assert.strictEqual(interceptedUrl, 'https://script.google.com/macros/s/AKfycb_test/exec');
+    assert.strictEqual(interceptedBody.folderName, 'Engineering_Sync');
+    assert.strictEqual(interceptedBody.audioFileName, 'Call_Audio_2026.webm');
+    assert.strictEqual(interceptedBody.markdownFileName, 'Call_Summary_2026.md');
+    assert.ok(interceptedBody.markdownText.includes('Adopted Webhook mode'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+await itAsync('Should gracefully catch and format Webhook HTTP errors', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    statusText: 'Bad Gateway'
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await uploader.uploadViaWebhook({
+          webhookUrl: 'https://script.google.com/macros/s/invalid/exec',
+          folderName: 'Test',
+          audioBlob: null,
+          audioFileName: 'audio.webm',
+          markdownText: 'notes',
+          markdownFileName: 'notes.md',
+          onProgress: () => {}
+        });
+      },
+      /Google Apps Script returned HTTP 502/,
+      'Must throw descriptive error on non-200 HTTP responses'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4. Google Drive REST API v3 Multipart Protocol Test
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 4: Google Drive REST API v3 Flow ---');
+
+await itAsync('Should search folder, upload multipart markdown and audio via REST API v3', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+
+    if (url.includes('drive/v3/files?q=')) {
+      // Return folder found
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          files: [{ id: 'found_folder_999', name: 'Jitsi_Meetings', webViewLink: 'https://drive.google.com/drive/folders/found_folder_999' }]
+        })
+      };
+    }
+
+    if (url.includes('upload/drive/v3/files?uploadType=multipart')) {
+      // Return uploaded file
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'uploaded_file_' + Math.floor(Math.random() * 1000),
+          webViewLink: 'https://drive.google.com/file/d/test_uploaded/view'
+        })
+      };
+    }
+
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  try {
+    const fakeAudioBlob = new Blob(['AUDIO_BINARY_CHUNK_DATA'], { type: 'audio/webm' });
+    const result = await uploader.uploadViaGoogleDriveApi({
+      token: 'ya29.a0AfH6SMTestTokenValid',
+      folderName: 'Jitsi_Meetings',
+      audioBlob: fakeAudioBlob,
+      audioFileName: 'Meeting_Audio_REST.webm',
+      markdownText: '# Executive Minutes',
+      markdownFileName: 'Meeting_Summary_REST.md',
+      onProgress: () => {}
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.mode, 'rest_api');
+    assert.strictEqual(result.folderId, 'found_folder_999');
+    assert.strictEqual(result.folderUrl, 'https://drive.google.com/drive/folders/found_folder_999');
+
+    // Verify requests performed
+    assert.ok(requests.length >= 2, 'Must perform folder search and multipart uploads');
+    const folderSearchReq = requests.find(r => r.url.includes('drive/v3/files?q='));
+    assert.ok(folderSearchReq, 'Must query existing folders');
+    assert.strictEqual(folderSearchReq.options.headers['Authorization'], 'Bearer ya29.a0AfH6SMTestTokenValid');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+await itAsync('Should detect expired Google OAuth2 tokens (HTTP 401)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 401,
+    statusText: 'Unauthorized',
+    json: async () => ({ error: { message: 'Invalid Credentials' } })
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await uploader.uploadViaGoogleDriveApi({
+          token: 'ya29.expired_token',
+          folderName: 'Jitsi_Meetings',
+          audioBlob: null,
+          audioFileName: 'audio.webm',
+          markdownText: 'notes',
+          markdownFileName: 'notes.md',
+          onProgress: () => {}
+        });
+      },
+      /Google OAuth Token is invalid or expired/,
+      'Must detect and report 401 expired token clearly'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 5. Multi-Account Storage Sync & Quota Rollover Test
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 5: Google Drive Multi-Account Rollover ---');
+
+const { GoogleDriveService } = await import('./src/services/googleDrive.js');
+const driveService = new GoogleDriveService();
+
+it('Should support hot-swapping between Account 1 and Account 2', () => {
+  const accs = driveService.getAllAccounts();
+  assert.ok(accs.length >= 2, 'Must have at least 2 accounts');
+
+  driveService.setActiveAccount(accs[1].id);
+  assert.strictEqual(driveService.getActiveAccount().id, accs[1].id);
+
+  driveService.setActiveAccount(accs[0].id);
+  assert.strictEqual(driveService.getActiveAccount().id, accs[0].id);
+});
+
+it('Should calculate free quota accurately before upload', () => {
+  const stats = driveService.getAccountStorageStats();
+  assert.ok(typeof stats.freeGb === 'number');
+  assert.ok(stats.freeGb > 0, 'Must show available free space');
+  assert.strictEqual(stats.isFull, false);
+});
+
+// ---------------------------------------------------------------------------
+// 6. UI & Setup Documentation Verification
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 6: UI & Documentation Integrity ---');
+
+it('Should verify GOOGLE_DRIVE_SETUP_GUIDE.md exists and contains copy-paste Apps Script code', () => {
+  const guidePath = path.resolve('./GOOGLE_DRIVE_SETUP_GUIDE.md');
+  assert.ok(fs.existsSync(guidePath), 'GOOGLE_DRIVE_SETUP_GUIDE.md must exist in project root');
+  const guideText = fs.readFileSync(guidePath, 'utf-8');
+
+  assert.ok(guideText.includes('function doPost(e)'), 'Guide must contain doPost(e) Google Apps Script snippet');
+  assert.ok(guideText.includes('DriveApp.getFoldersByName'), 'Guide must contain DriveApp folder creation logic');
+  assert.ok(guideText.includes('New deployment') && guideText.includes('Web app'), 'Guide must explain deployment steps');
+});
+
+it('Should verify extension content.js contains Webhook and OAuth input handlers', () => {
+  const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
+  assert.ok(contentJs.includes('jitsiAccWebhookInput'), 'content.js must have Webhook input selector');
+  assert.ok(contentJs.includes('jitsiAccTokenInput'), 'content.js must have OAuth token input selector');
+  assert.ok(contentJs.includes('uploadPackage'), 'content.js must call uploadPackage');
+  assert.ok(contentJs.includes('Local Backup Saved'), 'content.js must display transparent message when unconfigured');
+});
+
+console.log(`\n========================================`);
+console.log(`Google Drive Test Results: ${passedTests}/${totalTests} passed`);
+console.log(`========================================\n`);

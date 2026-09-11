@@ -59,7 +59,7 @@
   const savedIdx = getStorageItem(STORAGE_ACTIVE_KEY);
   if (savedIdx !== null) activeAccIdx = Number(savedIdx) || 0;
 
-  const DEFAULT_GEMINI_KEY = '';
+  const DEFAULT_GEMINI_KEY = ''; // use your Gemini Flash API key
   let geminiApiKey = getStorageItem(STORAGE_AI_KEY) || DEFAULT_GEMINI_KEY;
   let editingAccIdx = activeAccIdx;
 

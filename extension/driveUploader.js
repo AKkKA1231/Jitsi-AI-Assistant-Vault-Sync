@@ -17,13 +17,31 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
 
   /**
-   * Converts a Blob to a Base64 string
+   * Converts a Blob to a Base64 string (Browser & Node.js compatible)
    */
-  function blobToBase64(blob) {
+  async function blobToBase64(blob) {
+    if (blob && typeof blob.arrayBuffer === 'function') {
+      const buffer = await blob.arrayBuffer();
+      if (typeof Buffer !== 'undefined') {
+        return Buffer.from(buffer).toString('base64');
+      }
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const chunk = 8192;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+
     return new Promise((resolve, reject) => {
+      if (typeof FileReader === 'undefined') {
+        reject(new Error('FileReader is not available'));
+        return;
+      }
       const reader = new FileReader();
       reader.onloadend = () => {
-        const base64data = reader.result.split(',')[1] || '';
+        const base64data = (reader.result || '').split(',')[1] || '';
         resolve(base64data);
       };
       reader.onerror = reject;
