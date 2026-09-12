@@ -96,6 +96,7 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
   const cleanPayload = {
     folderName: payload.folderName || 'Jitsi_Meetings',
     roomName: payload.roomName || 'Meeting',
+    targetFolderId: payload.targetFolderId || '',
     audioFileName: payload.audioFileName || 'Meeting_Audio.webm',
     audioMimeType: payload.audioMimeType || 'audio/webm',
     audioBase64: payload.audioBase64 || payload.base64Audio || '',
@@ -103,13 +104,27 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
     markdownText: payload.markdownText || payload.fileContent || ''
   };
 
-  const res = await fetch(cleanUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
-    },
-    body: JSON.stringify(cleanPayload)
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 50000);
+
+  let res;
+  try {
+    res = await fetch(cleanUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8' // Avoid CORS preflight on GAS
+      },
+      body: JSON.stringify(cleanPayload),
+      signal: controller.signal
+    });
+  } catch (netErr) {
+    if (netErr.name === 'AbortError') {
+      throw new Error('Google Apps Script request timed out (50s). The payload took too long for Apps Script to decode. Meeting notes and audio have been safely downloaded locally.');
+    }
+    throw netErr;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const text = await res.text().catch(() => '');
 

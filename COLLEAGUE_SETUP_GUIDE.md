@@ -61,18 +61,30 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
    function doPost(e) {
      try {
        var data = JSON.parse(e.postData.contents);
-       var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
-       var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+       var subFolder;
+       if (data.targetFolderId) {
+         try {
+           subFolder = DriveApp.getFolderById(data.targetFolderId);
+         } catch (fErr) {}
+       }
        
-       var room = data.roomName || "Meeting";
-       var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
-       var subFolder = parentFolder.createFolder(room + "_" + dateStr);
+       if (!subFolder) {
+         var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
+         var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+         var room = data.roomName || "Meeting";
+         var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
+         subFolder = parentFolder.createFolder(room + "_" + dateStr);
+       }
        
-       // 1. Save Meeting Summary & Action Items (.md)
-       var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio attached.";
-       var mdFile = subFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+       // 1. Save Meeting Summary & Action Items (.md) if provided
+       var mdUrl = null;
+       if (data.markdownText) {
+         var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio attached.";
+         var mdFile = subFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+         mdUrl = mdFile.getUrl();
+       }
        
-       // 2. Save Audio Recording (.webm)
+       // 2. Save Audio Recording (.webm) if provided
        var audioUrl = null;
        var audioBase64 = data.audioBase64 || data.base64Audio;
        if (audioBase64 && audioBase64.length > 0) {
@@ -91,7 +103,7 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
          status: "success",
          folderId: subFolder.getId(),
          folderUrl: subFolder.getUrl(),
-         notesUrl: mdFile.getUrl(),
+         notesUrl: mdUrl,
          audioUrl: audioUrl
        })).setMimeType(ContentService.MimeType.JSON);
      } catch (err) {

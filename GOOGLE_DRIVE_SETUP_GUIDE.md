@@ -25,20 +25,32 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var mainFolderName = data.folderName || "Jitsi_Meetings";
     
-    // 1. Locate or create main meetings folder
-    var folders = DriveApp.getFoldersByName(mainFolderName);
-    var mainFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(mainFolderName);
+    var meetingFolder;
+    if (data.targetFolderId) {
+      try {
+        meetingFolder = DriveApp.getFolderById(data.targetFolderId);
+      } catch (fErr) {}
+    }
 
-    // 2. Create subfolder per meeting session
-    var room = data.roomName || "Meeting";
-    var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
-    var meetingFolder = mainFolder.createFolder(room + "_" + dateStr);
+    if (!meetingFolder) {
+      // 1. Locate or create main meetings folder
+      var folders = DriveApp.getFoldersByName(mainFolderName);
+      var mainFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(mainFolderName);
 
-    // 3. Save Meeting Notes & Action Items (.md)
-    var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio recording attached.";
-    var mdFile = meetingFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
+      // 2. Create subfolder per meeting session
+      var room = data.roomName || "Meeting";
+      var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
+      meetingFolder = mainFolder.createFolder(room + "_" + dateStr);
+    }
 
-    // 4. Save Audio Recording (.webm)
+    // 3. Save Meeting Notes & Action Items (.md) if provided
+    var notesUrl = null;
+    if (data.markdownText) {
+      var mdFile = meetingFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", data.markdownText, "text/markdown");
+      notesUrl = mdFile.getUrl();
+    }
+
+    // 4. Save Audio Recording (.webm) if provided
     var audioUrl = null;
     var audioBase64 = data.audioBase64 || data.base64Audio;
     if (audioBase64 && audioBase64.length > 0) {
@@ -57,7 +69,7 @@ function doPost(e) {
       status: "success",
       folderId: meetingFolder.getId(),
       folderUrl: meetingFolder.getUrl(),
-      notesUrl: mdFile.getUrl(),
+      notesUrl: notesUrl,
       audioUrl: audioUrl
     })).setMimeType(ContentService.MimeType.JSON);
 

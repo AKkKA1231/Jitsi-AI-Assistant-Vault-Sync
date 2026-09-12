@@ -197,11 +197,19 @@
       const totalSlices = Math.ceil(audioBase64.length / sliceSize) || 1;
       let currentSlice = 0;
 
+      // 55-second safety timer so UI never hangs indefinitely
+      const safetyTimer = setTimeout(() => {
+        try { port.disconnect(); } catch (e) {}
+        reject(new Error('Google Drive upload timed out after 55s. Local backup files have been preserved.'));
+      }, 55000);
+
       port.onMessage.addListener((response) => {
         if (response.type === 'SUCCESS') {
+          clearTimeout(safetyTimer);
           port.disconnect();
           resolve(response.data);
         } else if (response.type === 'ERROR') {
+          clearTimeout(safetyTimer);
           port.disconnect();
           reject(new Error(response.error || 'Streaming upload failed'));
         } else if (response.type === 'ACK') {
@@ -231,42 +239,20 @@
   }
 
   /**
-   * Upload using Google Apps Script Webhook
+   * Dispatches payload to Webhook via port streaming, standard sendMessage, or direct fetch
    */
-  async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, onProgress }) {
-    onProgress(20, `Encoding package for Google Apps Script Webhook...`);
-
-    let audioBase64 = '';
-    if (audioBlob && audioBlob.size > 0) {
-      audioBase64 = await blobToBase64(audioBlob);
-    }
-
-    onProgress(50, `Transmitting package to personal Google Drive...`);
-
-    const payload = {
-      folderName: folderName || 'Jitsi_Meetings',
-      roomName: roomName || 'Meeting',
-      audioFileName: audioFileName || 'Meeting_Audio.webm',
-      audioMimeType: audioBlob?.type || 'audio/webm',
-      audioBase64: audioBase64,
-      markdownFileName: markdownFileName || 'Meeting_Summary.md',
-      markdownText: markdownText || ''
-    };
-
-    // Route via extension background service worker to bypass page CSP on meet.jit.si
+  async function dispatchWebhookPayload({ webhookUrl, payload, audioBase64 = '', onProgress = () => {} }) {
     let json = null;
     let bgServiceWorkerUsed = false;
-
-    // Check if payload is large (> 20MB Base64) to proactively use chunked Port streaming
     const isLargeAudio = audioBase64 && audioBase64.length > 20 * 1024 * 1024;
 
     if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.connect === 'function' && isLargeAudio) {
       try {
-        onProgress(55, `Streaming large meeting audio (~${(audioBase64.length / 1024 / 1024).toFixed(1)} MB) to service worker...`);
+        onProgress(55, `Streaming large meeting audio (~${(audioBase64.length / 1024 / 1024).toFixed(1)} MB) to background worker...`);
         json = await streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress });
         bgServiceWorkerUsed = true;
       } catch (streamErr) {
-        console.warn('[Drive Uploader] Port streaming encountered error, attempting standard message fallback:', streamErr);
+        console.warn('[Drive Uploader] Port streaming notice, falling back to message:', streamErr);
       }
     }
 
@@ -291,23 +277,14 @@
         });
         bgServiceWorkerUsed = true;
       } catch (bgErr) {
-        // If message exceeded 64MiB limit, fallback to streaming port
         if (bgErr.message.includes('exceeded maximum allowed size of 64MiB') && typeof chrome.runtime.connect === 'function') {
-          console.log('[Drive Uploader] 64MiB IPC limit hit. Switching to chunked streaming port...');
-          try {
-            json = await streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress });
-            bgServiceWorkerUsed = true;
-          } catch (portErr) {
-            throw portErr;
-          }
+          json = await streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress });
+          bgServiceWorkerUsed = true;
         } else {
           const isConnectionError = bgErr.message.includes('Could not establish connection') ||
                                     bgErr.message.includes('Receiving end does not exist') ||
                                     bgErr.message.includes('Extension context invalidated');
-          if (!isConnectionError) {
-            throw bgErr;
-          }
-          console.warn('[Drive Uploader] Background worker unavailable, falling back to direct fetch:', bgErr);
+          if (!isConnectionError) throw bgErr;
         }
       }
     }
@@ -353,7 +330,6 @@
       }
     }
 
-    onProgress(100, `Upload complete!`);
     return {
       success: true,
       mode: 'webhook',
@@ -365,9 +341,94 @@
   }
 
   /**
+   * Upload using Google Apps Script Webhook with 32kbps voice optimization and decoupled notes sync
+   */
+  async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, syncMode = 'full', onProgress = () => {} }) {
+    // Mode 1: Instant Notes Only (< 1s sync)
+    if (syncMode === 'notes_only' || !audioBlob || audioBlob.size === 0) {
+      onProgress(30, '⚡ Fast-syncing meeting notes to Google Drive (< 1s)...');
+      const payload = {
+        folderName: folderName || 'Jitsi_Meetings',
+        roomName: roomName || 'Meeting',
+        audioFileName: '',
+        audioBase64: '',
+        markdownFileName: markdownFileName || 'Meeting_Summary.md',
+        markdownText: markdownText || ''
+      };
+      const result = await dispatchWebhookPayload({ webhookUrl, payload, onProgress });
+      onProgress(100, 'Upload complete!');
+      return result;
+    }
+
+    // Mode 2: Optimized Full Package (Notes + Audio)
+    const audioSizeMb = (audioBlob.size / 1024 / 1024).toFixed(1);
+    onProgress(15, `Encoding audio package (${audioSizeMb} MB, 32 kbps voice optimized)...`);
+    const audioBase64 = await blobToBase64(audioBlob);
+
+    // If audio is exceptionally large (> 15MB Base64, e.g. > 1 hour of speech), use decoupled 2-step sync:
+    const isVeryLarge = audioBase64 && audioBase64.length > 15 * 1024 * 1024;
+    if (isVeryLarge) {
+      onProgress(25, `Step 1/2: Fast-syncing meeting notes to Google Drive...`);
+      const notesPayload = {
+        folderName: folderName || 'Jitsi_Meetings',
+        roomName: roomName || 'Meeting',
+        audioFileName: '',
+        audioBase64: '',
+        markdownFileName: markdownFileName || 'Meeting_Summary.md',
+        markdownText: markdownText || ''
+      };
+      const notesResult = await dispatchWebhookPayload({ webhookUrl, payload: notesPayload, onProgress });
+
+      // Step 2: Attach audio to created folder
+      onProgress(50, `Step 2/2: Notes saved! Attaching meeting audio (~${audioSizeMb} MB)...`);
+      try {
+        const audioPayload = {
+          targetFolderId: notesResult.folderId,
+          folderName: folderName || 'Jitsi_Meetings',
+          roomName: roomName || 'Meeting',
+          audioFileName: audioFileName || 'Meeting_Audio.webm',
+          audioMimeType: audioBlob?.type || 'audio/webm',
+          audioBase64: audioBase64,
+          markdownFileName: '',
+          markdownText: ''
+        };
+        const audioResult = await dispatchWebhookPayload({ webhookUrl, payload: audioPayload, audioBase64, onProgress });
+        onProgress(100, 'Upload complete!');
+        return {
+          ...notesResult,
+          audioUrl: audioResult.audioUrl || null
+        };
+      } catch (audioErr) {
+        console.warn('[Drive Uploader] Audio upload notice (notes safely preserved):', audioErr);
+        onProgress(100, 'Notes saved to Drive! Audio preserved locally.');
+        return {
+          ...notesResult,
+          audioUrl: null,
+          warning: 'Audio was preserved locally to protect against cloud execution limits.'
+        };
+      }
+    }
+
+    // Standard fast sync (< 15MB Base64) in single clean payload
+    onProgress(40, `Transmitting package to Google Drive (~${audioSizeMb} MB)...`);
+    const payload = {
+      folderName: folderName || 'Jitsi_Meetings',
+      roomName: roomName || 'Meeting',
+      audioFileName: audioFileName || 'Meeting_Audio.webm',
+      audioMimeType: audioBlob?.type || 'audio/webm',
+      audioBase64: audioBase64,
+      markdownFileName: markdownFileName || 'Meeting_Summary.md',
+      markdownText: markdownText || ''
+    };
+    const result = await dispatchWebhookPayload({ webhookUrl, payload, audioBase64, onProgress });
+    onProgress(100, 'Upload complete!');
+    return result;
+  }
+
+  /**
    * Unified meeting package dispatcher
    */
-  async function uploadPackage({ credentials, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, onProgress = () => {} }) {
+  async function uploadPackage({ credentials, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, syncMode = 'full', onProgress = () => {} }) {
     const creds = credentials || {};
     const webhookUrl = (creds.webhookUrl || '').trim();
     const token = (creds.token || creds.clientSecret || '').trim();
@@ -382,6 +443,7 @@
         markdownText,
         markdownFileName,
         roomName,
+        syncMode,
         onProgress
       });
     }

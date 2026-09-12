@@ -71,6 +71,13 @@
     const savedDur = window.localStorage.getItem(STORAGE_CHUNK_DURATION_KEY);
     if (savedDur) savedBlockDurationMins = Number(savedDur) || 5;
   } catch (e) {}
+
+  const STORAGE_DRIVE_SYNC_MODE_KEY = 'jitsi_drive_sync_mode';
+  let savedDriveSyncMode = 'full';
+  try {
+    const savedMode = window.localStorage.getItem(STORAGE_DRIVE_SYNC_MODE_KEY);
+    if (savedMode) savedDriveSyncMode = savedMode;
+  } catch (e) {}
   let activeMeetingBlockTranscripts = {};
 
   function getEl(id) {
@@ -542,14 +549,18 @@
       const uploader = window.JitsiDriveUploader;
       if (!uploader) throw new Error('Drive uploader module not loaded.');
 
+      const isNotesOnly = savedDriveSyncMode === 'notes_only';
+      const audioToUpload = isNotesOnly ? null : compiledAudioBlob;
+
       const result = await uploader.uploadPackage({
         credentials: creds,
         folderName: acc.folderName || 'Jitsi_Meetings',
         roomName: room,
-        audioBlob: compiledAudioBlob,
+        audioBlob: audioToUpload,
         audioFileName: audioFileName,
         markdownText: meetingSummaryMarkdown,
         markdownFileName: markdownFileName,
+        syncMode: savedDriveSyncMode,
         onProgress: (pct, msg) => {
           if (progressBar) progressBar.style.width = `${pct}%`;
           if (statusText) statusText.textContent = msg;
@@ -562,11 +573,17 @@
           progressBar.style.backgroundColor = '#10b981';
         }
         const folderUrl = result.folderUrl || 'https://drive.google.com/drive/my-drive';
-        if (statusText) statusText.innerHTML = `✅ <strong>Success!</strong> Audio &amp; notes uploaded to Google Drive: <code>${UI.escapeHtml(acc.folderName)}</code>.`;
+        const successMsg = isNotesOnly
+          ? `✅ <strong>Success!</strong> Meeting notes synced to Google Drive (instant &lt; 1s mode). Local audio saved.`
+          : `✅ <strong>Success!</strong> Audio &amp; notes uploaded to Google Drive: <code>${UI.escapeHtml(acc.folderName)}</code>.`;
+        if (statusText) statusText.innerHTML = successMsg;
         if (openDriveLink) {
           openDriveLink.href = folderUrl;
           openDriveLink.textContent = '📂 Open Folder in Google Drive';
           openDriveLink.style.display = 'block';
+        }
+        if (isNotesOnly && compiledAudioBlob) {
+          triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
         }
         if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Uploaded to Google Drive (${acc.name})!`);
@@ -874,6 +891,21 @@
           </select>
         </div>
 
+        <div class="jitsi-ai-ext-section-title">Google Drive Sync Optimization</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:600; color:#fff;">Cloud Sync Mode</span>
+            <span id="jitsiDriveSyncModeBadge" class="jitsi-ai-badge" style="font-size:10px; color:#10b981;">Notes + Audio</span>
+          </div>
+          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+            Control whether meeting audio is synced to cloud or preserved on your computer for instant lightweight uploads.
+          </p>
+          <select id="jitsiDriveSyncModeSelect" style="width:100%; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; cursor:pointer;">
+            <option value="full" selected>⚡ Fast Full Sync: Notes + Compressed Audio (Default)</option>
+            <option value="notes_only">⚡ Instant Notes Only: Summary in Drive (&lt; 1s) + Audio on Computer</option>
+          </select>
+        </div>
+
         <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Config</div>
         <div class="jitsi-ai-ext-card jitsi-ai-card">
           <div class="jitsi-ai-pill-row" style="display:flex; gap:6px; margin-bottom:10px;">
@@ -1029,6 +1061,21 @@
       };
     }
 
+    const syncModeSelect = getEl('jitsiDriveSyncModeSelect');
+    if (syncModeSelect) {
+      syncModeSelect.value = savedDriveSyncMode;
+      syncModeSelect.onchange = () => {
+        savedDriveSyncMode = syncModeSelect.value || 'full';
+        window.localStorage.setItem(STORAGE_DRIVE_SYNC_MODE_KEY, savedDriveSyncMode);
+        const badge = getEl('jitsiDriveSyncModeBadge');
+        if (badge) {
+          badge.textContent = savedDriveSyncMode === 'notes_only' ? 'Instant Notes (< 1s)' : 'Notes + Audio';
+          badge.style.color = savedDriveSyncMode === 'notes_only' ? '#38bdf8' : '#10b981';
+        }
+        showToast(`Drive sync mode set to: ${savedDriveSyncMode === 'notes_only' ? 'Instant Notes Only (< 1s)' : 'Fast Notes + Audio'}`);
+      };
+    }
+
     getEl('jitsiSelectAcc0').onclick = () => selectAccount(0);
     getEl('jitsiSelectAcc1').onclick = () => selectAccount(1);
     getEl('jitsiSaveAccBtn').onclick = saveActiveAccountDetails;
@@ -1072,6 +1119,14 @@
     if (durBadge) durBadge.textContent = `${savedBlockDurationMins} Minutes`;
     const durSelect = getEl('jitsiChunkDurationSelect');
     if (durSelect) durSelect.value = String(savedBlockDurationMins);
+
+    const modeBadge = getEl('jitsiDriveSyncModeBadge');
+    if (modeBadge) {
+      modeBadge.textContent = savedDriveSyncMode === 'notes_only' ? 'Instant Notes (< 1s)' : 'Notes + Audio';
+      modeBadge.style.color = savedDriveSyncMode === 'notes_only' ? '#38bdf8' : '#10b981';
+    }
+    const modeSelect = getEl('jitsiDriveSyncModeSelect');
+    if (modeSelect) modeSelect.value = savedDriveSyncMode;
     const blockHeader = getEl('jitsiBlockSectionHeader');
     if (blockHeader) {
       const count = getEl('jitsiChunkCountBadge')?.textContent || '0';

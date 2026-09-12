@@ -161,7 +161,7 @@
     // 1. Capture Local Microphone with dynamic mute gating
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
       });
       const micSource = audioCtx.createMediaStreamSource(micStream);
       micGainNode = audioCtx.createGain();

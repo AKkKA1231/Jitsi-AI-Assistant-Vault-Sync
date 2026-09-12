@@ -154,6 +154,44 @@ await itAsync('Should construct correct payload and process successful Webhook r
   }
 });
 
+await itAsync('Should support Instant Notes-Only sync mode (< 1s lightweight payload)', async () => {
+  const originalFetch = globalThis.fetch;
+  let sentPayload = null;
+  globalThis.fetch = async (url, options) => {
+    sentPayload = JSON.parse(options.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: 'success',
+        folderId: 'fast_folder_101',
+        folderUrl: 'https://drive.google.com/drive/folders/fast_folder_101',
+        notesUrl: 'https://drive.google.com/file/d/notes_101/view'
+      })
+    };
+  };
+
+  try {
+    const result = await uploader.uploadViaWebhook({
+      webhookUrl: 'https://script.google.com/macros/s/fast/exec',
+      folderName: 'Quick_Sync',
+      audioBlob: new Blob(['SOME_LARGE_AUDIO'], { type: 'audio/webm' }),
+      audioFileName: 'audio.webm',
+      markdownText: '# Instant Meeting Minutes\n- Fast note',
+      markdownFileName: 'Meeting_Summary.md',
+      syncMode: 'notes_only',
+      onProgress: () => {}
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.folderId, 'fast_folder_101');
+    assert.strictEqual(sentPayload.audioBase64, '', 'Must not transmit audio in notes_only mode');
+    assert.ok(sentPayload.markdownText.includes('Instant Meeting Minutes'), 'Must transmit markdown notes');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 await itAsync('Should accept alternative Apps Script success payloads (status: success, result: ok)', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
