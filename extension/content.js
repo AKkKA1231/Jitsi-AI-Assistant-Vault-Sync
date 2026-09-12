@@ -250,11 +250,16 @@
 
       liveSTTRecognizer.onerror = (evt) => {
         const err = evt ? evt.error : 'unknown';
-        console.warn('[Live STT] Speech recognition notice:', err);
-        // Do not hammer audio service if permission is denied or service unavailable
+        // 'aborted' and 'no-speech' are benign lifecycle events (fired on mic mute, user silence, or stop)
+        if (err === 'aborted' || err === 'no-speech') {
+          return;
+        }
+        // Gracefully halt retries if permission is unavailable
         if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
           liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
+          return;
         }
+        console.log('[Live STT] Speech recognition notice:', err);
       };
 
       liveSTTRecognizer.onend = () => {
@@ -273,7 +278,7 @@
 
       liveSTTRecognizer.start();
     } catch (e) {
-      console.warn('[Live STT] Init warning:', e);
+      console.log('[Live STT] Init notice:', e.message);
     }
   }
 
@@ -281,6 +286,9 @@
     if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
     liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
     if (liveSTTRecognizer) {
+      // Detach listeners before aborting so Chrome does not log an 'aborted' error
+      liveSTTRecognizer.onerror = null;
+      liveSTTRecognizer.onend = null;
       try { liveSTTRecognizer.abort(); } catch (e) {}
       liveSTTRecognizer = null;
     }
