@@ -20,9 +20,40 @@
   let logicalSpeechBlocks = [];   // 3-6 minute aggregated audio blocks for preemptive transcription
   let periodicCheckpointInterval = null;
   let recordingStartTime = null;
+  let cachedWebmHeader = null;        // Container header (EBML + Segment + Tracks) for standalone blocks
 
   const CHUNK_TIME_SLICE_MS = 10000;         // 10 seconds for resilient disk safety
   let logicalBlockDurationSec = 300;         // 5 minutes default per block (configurable: 3, 4, 5, 6 mins)
+
+  /**
+   * Extracts the initial WebM container header (EBML Header, Segment Header, and Tracks)
+   * from the very first recorded chunk by locating the first Cluster element (0x1F43B675).
+   * Subsequent logical blocks (Blocks #2, #3, ...) require this header to be a valid,
+   * standalone WebM file playable by media players and accepted by Gemini AI without HTTP 400 errors.
+   */
+  async function extractWebmHeader(chunkBlob) {
+    if (!chunkBlob) return null;
+    try {
+      let buffer;
+      if (typeof chunkBlob.arrayBuffer === 'function') {
+        buffer = await chunkBlob.arrayBuffer();
+      } else {
+        return null;
+      }
+      const bytes = new Uint8Array(buffer);
+      // WebM Cluster Element ID is 0x1F 0x43 0xB6 0x75
+      for (let i = 0; i < bytes.length - 4; i++) {
+        if (bytes[i] === 0x1f && bytes[i + 1] === 0x43 && bytes[i + 2] === 0xb6 && bytes[i + 3] === 0x75) {
+          const headerSlice = chunkBlob.slice(0, i, 'audio/webm');
+          console.log(`[Recorder] Extracted WebM container header (${headerSlice.size} bytes).`);
+          return headerSlice;
+        }
+      }
+    } catch (e) {
+      console.warn('[Recorder] WebM header extraction error:', e);
+    }
+    return null;
+  }
 
   function isCurrentlyRecording() {
     return isRecording;
@@ -56,7 +87,15 @@
   function sealCurrentLogicalBlock(callback) {
     if (currentBlockChunks.length > 0) {
       const blockIndex = logicalSpeechBlocks.length + 1; // 1-indexed for display
-      const blockBlob = new Blob(currentBlockChunks, { type: 'audio/webm' });
+
+      // Block #1 already contains chunk #0 with the initial EBML + Segment + Tracks header.
+      // Blocks #2, #3, ... contain only raw Clusters, so we prepend the cached WebM container
+      // header so Gemini and media decoders parse each block cleanly without HTTP 400 errors.
+      const blockChunks = (blockIndex === 1 || !cachedWebmHeader)
+        ? currentBlockChunks
+        : [cachedWebmHeader, ...currentBlockChunks];
+
+      const blockBlob = new Blob(blockChunks, { type: 'audio/webm' });
       const durationSec = Math.round((currentBlockChunks.length * CHUNK_TIME_SLICE_MS) / 1000);
       const endSec = currentBlockStartTime + durationSec;
 
@@ -93,6 +132,7 @@
     logicalSpeechBlocks = [];
     currentBlockChunks = [];
     currentBlockStartTime = 0;
+    cachedWebmHeader = null;
     recordingStartTime = Date.now();
 
     const mimeType = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
@@ -116,6 +156,17 @@
       if (event.data && event.data.size > 500) {
         recordedChunks.push(event.data);
         currentBlockChunks.push(event.data);
+
+        // Cache the WebM container header (EBML + Segment + Tracks) from the very first chunk
+        if (recordedChunks.length === 1 && !cachedWebmHeader) {
+          extractWebmHeader(event.data).then((hdr) => {
+            if (hdr && hdr.size > 0) {
+              cachedWebmHeader = hdr;
+            }
+          }).catch((err) => {
+            console.warn('[Recorder] Header extraction notice:', err);
+          });
+        }
 
         const chunkIndex = recordedChunks.length;
         const chunkEntry = {
@@ -221,6 +272,9 @@
     setBlockDuration,
     getBlockDurationMinutes,
     CHUNK_TIME_SLICE_MS,
+    getCachedWebmHeader: () => cachedWebmHeader,
+    setCachedWebmHeader: (hdr) => { cachedWebmHeader = hdr; },
+    extractWebmHeader,
     get LOGICAL_BLOCK_DURATION_SEC() {
       return logicalBlockDurationSec;
     }

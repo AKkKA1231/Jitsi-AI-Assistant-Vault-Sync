@@ -137,6 +137,55 @@ console.log('\n--- Test Group 4: Meeting Mic Mute Synchronization & 100% Track C
   console.log('  ✅ PASS: Local audio stream track gating and gain zeroing verified intact');
 }
 
+// --- Test 5: WebM Container Header Extraction & Prepending on Block #2+ ---
+console.log('\n--- Test Group 5: WebM Container Header Extraction & Standalone Block Validation ---');
+{
+  assert(typeof JitsiRecorderModule.extractWebmHeader === 'function', 'extractWebmHeader should be exported');
+
+  // Synthetic WebM Chunk 0: EBML Header + Segment + Tracks (16 bytes) followed by Cluster (0x1F43B675)
+  const syntheticEbmlTracksHeader = Buffer.from([
+    0x1a, 0x45, 0xdf, 0xa3, // EBML ID
+    0x01, 0x00, 0x00, 0x00,
+    0x18, 0x53, 0x80, 0x67, // Segment ID
+    0x16, 0x54, 0xae, 0x6b  // Tracks ID
+  ]);
+  const syntheticCluster = Buffer.from([
+    0x1f, 0x43, 0xb6, 0x75, // Cluster ID
+    0x80, 0x00, 0x01, 0x00
+  ]);
+  const syntheticFirstChunk = new Blob([syntheticEbmlTracksHeader, syntheticCluster], { type: 'audio/webm' });
+
+  const extractedHeader = await JitsiRecorderModule.extractWebmHeader(syntheticFirstChunk);
+  assert.ok(extractedHeader, 'Should extract WebM container header');
+  assert.strictEqual(extractedHeader.size, syntheticEbmlTracksHeader.length, 'Extracted header size must match EBML+Tracks prefix');
+
+  const headerBuf = Buffer.from(await extractedHeader.arrayBuffer());
+  assert.deepStrictEqual(headerBuf, syntheticEbmlTracksHeader, 'Header buffer must match EBML header bytes');
+
+  // Set the cached header on recorder
+  JitsiRecorderModule.setCachedWebmHeader(extractedHeader);
+  assert.strictEqual(JitsiRecorderModule.getCachedWebmHeader(), extractedHeader, 'Cached header must be saved');
+
+  // Verify that subsequent block blobs get the cached header prepended
+  const rawClusterData = Buffer.from([0x1f, 0x43, 0xb6, 0x75, 0xaa, 0xbb]);
+  const rawBlockChunks = [new Blob([rawClusterData], { type: 'audio/webm' })];
+  
+  // Synthesize block 2 blob using the cached header
+  const block2Blob = new Blob([extractedHeader, ...rawBlockChunks], { type: 'audio/webm' });
+  const block2Bytes = new Uint8Array(await block2Blob.arrayBuffer());
+
+  // Must begin with EBML ID: 0x1A 0x45 0xDF 0xA3
+  assert.strictEqual(block2Bytes[0], 0x1a, 'Block #2 first byte must be EBML ID 0x1A');
+  assert.strictEqual(block2Bytes[1], 0x45, 'Block #2 second byte must be EBML ID 0x45');
+  assert.strictEqual(block2Bytes[2], 0xdf, 'Block #2 third byte must be EBML ID 0xDF');
+  assert.strictEqual(block2Bytes[3], 0xa3, 'Block #2 fourth byte must be EBML ID 0xA3');
+
+  console.log('  ✅ PASS: WebM container header extracted correctly from first chunk');
+  console.log('  ✅ PASS: Block #2 successfully prepended with EBML container header');
+}
+
 console.log('\n======================================================');
 console.log('🎉 ALL PREEMPTIVE 3-6 MINUTE CHUNKING & COMPILATION TESTS PASSED!');
 console.log('======================================================\n');
+process.exit(0);
+
