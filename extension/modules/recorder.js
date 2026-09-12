@@ -1,7 +1,7 @@
 /**
  * Jitsi AI Assistant - Recorder & Chunking Engine
- * Implements 5-second resilient slicing for Vault safety and 3-minute logical chunking
- * for high-speed parallel AI transcription.
+ * Implements 10-second resilient slicing for Vault safety and 3-6 minute logical chunking
+ * for preemptive background AI transcription and seamless meeting-end compilation.
  */
 
 (function (root, factory) {
@@ -15,14 +15,14 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   let mediaRecorder = null;
   let isRecording = false;
-  let recordedChunks = [];        // Raw 5-second blob chunks for recovery
+  let recordedChunks = [];        // Raw 10-second blob chunks for recovery
   let speechSegments = [];        // Segment metadata
-  let logicalSpeechBlocks = [];    // 3-minute aggregated audio blocks for parallel transcription
+  let logicalSpeechBlocks = [];   // 3-6 minute aggregated audio blocks for preemptive transcription
   let periodicCheckpointInterval = null;
   let recordingStartTime = null;
 
-  const CHUNK_TIME_SLICE_MS = 5000;         // 5 seconds for resilient disk safety
-  const LOGICAL_BLOCK_DURATION_SEC = 180;    // 3 minutes per parallel transcription block
+  const CHUNK_TIME_SLICE_MS = 10000;         // 10 seconds for resilient disk safety
+  let logicalBlockDurationSec = 300;         // 5 minutes default per block (configurable: 3, 4, 5, 6 mins)
 
   function isCurrentlyRecording() {
     return isRecording;
@@ -36,40 +36,58 @@
     return speechSegments;
   }
 
+  function setBlockDuration(minutes) {
+    const mins = Number(minutes) || 5;
+    logicalBlockDurationSec = Math.max(180, Math.min(360, mins * 60));
+    console.log(`[Recorder] Set logical chunk duration to ${Math.round(logicalBlockDurationSec / 60)} minutes (${logicalBlockDurationSec}s).`);
+  }
+
+  function getBlockDurationMinutes() {
+    return Math.round(logicalBlockDurationSec / 60);
+  }
+
   function getLogicalBlocks() {
-    // If there are recorded chunks not yet sealed into a block, seal the current active block
-    sealCurrentLogicalBlock();
     return logicalSpeechBlocks;
   }
 
   let currentBlockChunks = [];
   let currentBlockStartTime = 0;
 
-  function sealCurrentLogicalBlock() {
+  function sealCurrentLogicalBlock(callback) {
     if (currentBlockChunks.length > 0) {
-      const blockIndex = logicalSpeechBlocks.length;
+      const blockIndex = logicalSpeechBlocks.length + 1; // 1-indexed for display
       const blockBlob = new Blob(currentBlockChunks, { type: 'audio/webm' });
       const durationSec = Math.round((currentBlockChunks.length * CHUNK_TIME_SLICE_MS) / 1000);
       const endSec = currentBlockStartTime + durationSec;
 
       const formatTime = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
-      logicalSpeechBlocks.push({
+      const blockEntry = {
+        id: `block_${blockIndex}`,
         index: blockIndex,
         startTime: formatTime(currentBlockStartTime),
         endTime: formatTime(endSec),
+        startSec: currentBlockStartTime,
+        endSec: endSec,
         durationSec: durationSec,
         blob: blockBlob,
         sizeKb: (blockBlob.size / 1024).toFixed(1),
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      });
+      };
 
+      logicalSpeechBlocks.push(blockEntry);
       currentBlockStartTime = endSec;
       currentBlockChunks = [];
+
+      if (typeof callback === 'function') {
+        callback(blockEntry);
+      }
+      return blockEntry;
     }
+    return null;
   }
 
-  async function startRecording({ mixedStream, onChunkCaptured, onVaultCheckpoint }) {
+  async function startRecording({ mixedStream, onChunkCaptured, onBlockSealed, onBlockProgress, onVaultCheckpoint }) {
     recordedChunks = [];
     speechSegments = [];
     logicalSpeechBlocks = [];
@@ -84,13 +102,13 @@
     mediaRecorder = new MediaRecorder(mixedStream, { mimeType });
 
     mediaRecorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 800) {
+      if (event.data && event.data.size > 500) {
         recordedChunks.push(event.data);
         currentBlockChunks.push(event.data);
 
         const chunkIndex = recordedChunks.length;
         const chunkEntry = {
-          id: `chunk_${chunkIndex}`,
+          id: `slice_${chunkIndex}`,
           index: chunkIndex,
           blob: event.data,
           sizeKb: (event.data.size / 1024).toFixed(1),
@@ -98,24 +116,37 @@
         };
         speechSegments.push(chunkEntry);
 
+        // Safe 10-second vault append
         if (typeof onChunkCaptured === 'function') {
           onChunkCaptured(event.data, chunkEntry);
         }
 
-        // Check if current 3-minute logical block is filled (180s = 36 chunks of 5s)
-        const blockChunkLimit = Math.floor((LOGICAL_BLOCK_DURATION_SEC * 1000) / CHUNK_TIME_SLICE_MS);
+        // Real-time progress update for the active block card
+        const currentBlockIndex = logicalSpeechBlocks.length + 1;
+        const currentElapsedSec = Math.round((currentBlockChunks.length * CHUNK_TIME_SLICE_MS) / 1000);
+        if (typeof onBlockProgress === 'function') {
+          onBlockProgress({
+            blockIndex: currentBlockIndex,
+            elapsedSec: currentElapsedSec,
+            totalSec: logicalBlockDurationSec,
+            startSec: currentBlockStartTime
+          });
+        }
+
+        // Check if current 3-6 minute logical block is filled
+        const blockChunkLimit = Math.floor((logicalBlockDurationSec * 1000) / CHUNK_TIME_SLICE_MS);
         if (currentBlockChunks.length >= blockChunkLimit) {
-          sealCurrentLogicalBlock();
-          console.log(`[Recorder] Sealed 3-minute logical audio block #${logicalSpeechBlocks.length} for parallel AI processing.`);
+          const sealed = sealCurrentLogicalBlock(onBlockSealed);
+          console.log(`[Recorder] Sealed ${Math.round(logicalBlockDurationSec / 60)}-minute logical audio block #${sealed.index} for preemptive AI transcription.`);
         }
       }
     };
 
-    // Resilient 5-second chunk slicing (essential for crash safety)
-    mediaRecorder.start(5000);
+    // Resilient 10-second chunk slicing
+    mediaRecorder.start(CHUNK_TIME_SLICE_MS);
     isRecording = true;
 
-    // Start 3-minute periodic rolling checkpoint
+    // Start periodic rolling checkpoint (every 3 minutes)
     if (periodicCheckpointInterval) clearInterval(periodicCheckpointInterval);
     periodicCheckpointInterval = setInterval(() => {
       if (!isRecording) return;
@@ -134,7 +165,7 @@
     return true;
   }
 
-  function stopRecording() {
+  function stopRecording(onBlockSealed) {
     return new Promise((resolve) => {
       if (periodicCheckpointInterval) {
         clearInterval(periodicCheckpointInterval);
@@ -145,17 +176,17 @@
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         const handleStop = () => {
           try { mediaRecorder.removeEventListener('stop', handleStop); } catch (e) {}
-          sealCurrentLogicalBlock();
+          sealCurrentLogicalBlock(onBlockSealed);
           resolve();
         };
         mediaRecorder.addEventListener('stop', handleStop);
         try { mediaRecorder.requestData(); } catch (e) {}
         try { mediaRecorder.stop(); } catch (e) {
-          sealCurrentLogicalBlock();
+          sealCurrentLogicalBlock(onBlockSealed);
           resolve();
         }
       } else {
-        sealCurrentLogicalBlock();
+        sealCurrentLogicalBlock(onBlockSealed);
         resolve();
       }
     });
@@ -176,6 +207,11 @@
     getRecordedChunks,
     getSpeechSegments,
     getLogicalBlocks,
-    LOGICAL_BLOCK_DURATION_SEC
+    setBlockDuration,
+    getBlockDurationMinutes,
+    CHUNK_TIME_SLICE_MS,
+    get LOGICAL_BLOCK_DURATION_SEC() {
+      return logicalBlockDurationSec;
+    }
   };
 });

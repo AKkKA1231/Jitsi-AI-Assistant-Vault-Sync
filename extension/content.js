@@ -65,6 +65,14 @@
   let geminiApiKey = window.localStorage.getItem(STORAGE_AI_KEY) || DEFAULT_GEMINI_KEY;
   let editingAccIdx = activeAccIdx;
 
+  const STORAGE_CHUNK_DURATION_KEY = 'jitsi_block_duration_mins';
+  let savedBlockDurationMins = 5;
+  try {
+    const savedDur = window.localStorage.getItem(STORAGE_CHUNK_DURATION_KEY);
+    if (savedDur) savedBlockDurationMins = Number(savedDur) || 5;
+  } catch (e) {}
+  let activeMeetingBlockTranscripts = {};
+
   function getEl(id) {
     if (!id) return null;
     if (id === 'jitsiAiFloatingToggle' || id === 'jitsi-ai-toggle-btn') {
@@ -94,13 +102,15 @@
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
       window.localStorage.setItem(STORAGE_ACTIVE_KEY, String(activeAccIdx));
       window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey);
+      window.localStorage.setItem(STORAGE_CHUNK_DURATION_KEY, String(savedBlockDurationMins));
       if (typeof chrome !== 'undefined' && chrome.storage) {
         const area = chrome.storage.sync || chrome.storage.local;
         if (area) {
           area.set({
             [STORAGE_KEY]: accounts,
             [STORAGE_ACTIVE_KEY]: activeAccIdx,
-            [STORAGE_AI_KEY]: geminiApiKey
+            [STORAGE_AI_KEY]: geminiApiKey,
+            [STORAGE_CHUNK_DURATION_KEY]: savedBlockDurationMins
           });
         }
       }
@@ -113,11 +123,15 @@
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const area = chrome.storage.sync || chrome.storage.local;
       if (area) {
-        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY], (res) => {
+        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY], (res) => {
           if (!res) return;
           if (res[STORAGE_AI_KEY]) geminiApiKey = res[STORAGE_AI_KEY].trim();
           if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = res[STORAGE_KEY];
           if (typeof res[STORAGE_ACTIVE_KEY] === 'number') activeAccIdx = res[STORAGE_ACTIVE_KEY];
+          if (res[STORAGE_CHUNK_DURATION_KEY]) {
+            savedBlockDurationMins = Number(res[STORAGE_CHUNK_DURATION_KEY]) || 5;
+            Recorder.setBlockDuration(savedBlockDurationMins);
+          }
           updateAccountUI();
           updateAiKeyDisplay();
         });
@@ -279,11 +293,22 @@
     if (isRecordingStarting) return;
 
     if (Recorder.isCurrentlyRecording()) {
-      // 1. Stop active recording
-      showToast('Stopping audio capture and finalizing chunks...');
-      await Recorder.stopRecording();
+      // 1. Stop active recording and seal final partial block
+      showToast('Stopping audio capture and compiling meeting notes...');
+      await Recorder.stopRecording((finalBlock) => {
+        if (finalBlock) {
+          UI.renderBlockItem(finalBlock, 'transcribing');
+        }
+      });
       AudioMixer.cleanupMixer();
       stopLiveSTT();
+
+      // Reset floating badge to Standby
+      const floatBadge = getEl('jitsiFloatingCount');
+      if (floatBadge) {
+        floatBadge.className = 'jitsi-ai-badge';
+        floatBadge.textContent = 'Standby';
+      }
 
       // Switch button immediately to "Record Again" so user never loses the ability to record!
       UI.setRecordButtonState('record_again');
@@ -293,7 +318,7 @@
       if (dot) dot.className = 'jitsi-ai-vad-dot';
       if (label) label.textContent = 'Completed';
 
-      // 2. Switch tab to notes & generate transcription in parallel
+      // 2. Switch tab to notes & execute fast-path compilation
       UI.switchTab('notes');
       await executeParallelTranscription();
 
@@ -322,6 +347,9 @@
         await Vault.createVaultSession(room);
       }
 
+      // Reset state and configure block duration
+      activeMeetingBlockTranscripts = {};
+      Recorder.setBlockDuration(savedBlockDurationMins);
       AudioMixer.resetVADStats();
       const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'));
       AudioMixer.initVAD(() => Recorder.isCurrentlyRecording());
@@ -330,13 +358,53 @@
       const tBox = getEl('jitsiTranscriptBox');
       if (tBox) tBox.innerHTML = '<em style="color:#64748b; font-size:12px;">Capturing speech in real-time...</em>';
 
+      const chunksList = getEl('jitsiChunksList');
+      if (chunksList) chunksList.innerHTML = `<em style="color:#64748b; font-size:11px; padding:6px 0;">${savedBlockDurationMins}-minute speech blocks will appear here as participants talk...</em>`;
+
       await Recorder.startRecording({
         mixedStream,
         onChunkCaptured: (chunkBlob, chunkMeta) => {
+          // Persist 10-second resilient slice to IndexedDB vault
           if (Vault.appendChunkToVault) {
             Vault.appendChunkToVault(chunkBlob, chunkMeta);
           }
-          UI.renderChunkItem(chunkMeta);
+        },
+        onBlockProgress: (prog) => {
+          UI.renderActiveBlockProgress(prog);
+          const floatBadge = getEl('jitsiFloatingCount');
+          if (floatBadge) {
+            floatBadge.className = 'jitsi-ai-badge recording';
+            const min = Math.floor(prog.elapsedSec / 60);
+            const sec = prog.elapsedSec % 60;
+            floatBadge.textContent = `🔴 Rec ${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+          }
+        },
+        onBlockSealed: (sealedBlock) => {
+          // 1. Render sealed block in drawer
+          UI.renderBlockItem(sealedBlock, 'transcribing');
+          showToast(`⚡ Sealed Block #${sealedBlock.index} [${sealedBlock.startTime}-${sealedBlock.endTime}]. Transcribing with Gemini Flash in background...`);
+
+          // 2. Preemptively transcribe in background while meeting continues
+          const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
+          Transcriber.transcribeSingleBlock(sealedBlock, { apiKey: activeKey, roomName: room }).then((result) => {
+            activeMeetingBlockTranscripts[sealedBlock.index] = result;
+            UI.updateBlockStatus(sealedBlock.index, 'completed', result.transcript);
+            showToast(`✅ Block #${sealedBlock.index} transcribed in background!`);
+
+            // Append preview snippet to transcript box
+            const tb = getEl('jitsiTranscriptBox');
+            if (tb && result.transcript) {
+              const ph = tb.querySelector('em');
+              if (ph) ph.remove();
+              const item = document.createElement('div');
+              item.style.marginBottom = '8px';
+              item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:700;">[Block #${sealedBlock.index} ${sealedBlock.startTime}-${sealedBlock.endTime}]</span> <div>${UI.escapeHtml(result.transcript)}</div>`;
+              tb.appendChild(item);
+              tb.scrollTop = tb.scrollHeight;
+            }
+          }).catch((err) => {
+            console.warn(`[Background STT] Block #${sealedBlock.index} notice:`, err);
+          });
         },
         onVaultCheckpoint: (chunks) => {
           if (Vault.saveVaultCheckpoint) {
@@ -347,7 +415,7 @@
 
       startLiveSTT();
       UI.setRecordButtonState('recording');
-      showToast('🔴 Recording started! Capturing voice in 3-minute parallel blocks.');
+      showToast(`🔴 Recording started! Capturing voice in ${savedBlockDurationMins}-minute parallel blocks.`);
     } catch (err) {
       console.error('Failed to start recording:', err);
       showToast('Microphone permission required to start audio capture.', true);
@@ -362,7 +430,8 @@
   }
 
   /**
-   * Parallel 3-5 Minute Chunk Transcription (Map-Reduce)
+   * Fast Meeting-End Compilation:
+   * Merges all precomputed background transcripts and transcribes only the final partial block.
    */
   async function executeParallelTranscription() {
     if (isTranscribing) return;
@@ -383,12 +452,13 @@
         if (playerBox) playerBox.style.display = 'block';
       }
 
-      showToast(`✨ Starting parallel AI transcription across ${logicalBlocks.length} chunk(s)...`);
+      showToast(`✨ Fast-compiling ${logicalBlocks.length} audio block(s)...`);
 
       const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
-      const transcriptionResult = await Transcriber.transcribeLogicalChunksParallel({
-        apiKey: activeKey,
+      const transcriptionResult = await Transcriber.compilePreemptivelyTranscribedMeeting({
         blocks: logicalBlocks,
+        precomputedTranscripts: activeMeetingBlockTranscripts,
+        apiKey: activeKey,
         roomName: room,
         onProgress: (pct, msg) => {
           const statusEl = getEl('jitsiUploadStatusText');
@@ -403,7 +473,7 @@
         Vault.markVaultSessionCompleted();
       }
 
-      showToast('✅ Parallel AI transcription & minutes synthesis completed!');
+      showToast('✅ AI Transcription & executive synthesis completed!');
     } catch (err) {
       console.error('Transcription error:', err);
       showToast(`Transcription error: ${err.message}`, true);
@@ -542,11 +612,11 @@
     const togglePill = document.createElement('button');
     togglePill.id = 'jitsi-ai-toggle-btn';
     togglePill.className = 'jitsi-ai-floating-toggle';
-    togglePill.title = "Click to open AI Assistant. Drag up/down to reposition.";
+    togglePill.title = "Click to open Meeting Notes AI. Drag up/down to reposition.";
     togglePill.innerHTML = `
-      <span class="jitsi-ai-logo-icon">✨</span>
-      <span id="jitsiToggleText" style="white-space:nowrap;">AI Assistant</span>
-      <span id="jitsiFloatingCount" class="jitsi-ai-badge">Ready</span>
+      <span class="jitsi-ai-logo-icon">🎙️</span>
+      <span id="jitsiToggleText" style="white-space:nowrap; font-weight:600;">Meeting Notes AI</span>
+      <span id="jitsiFloatingCount" class="jitsi-ai-badge">Standby</span>
       <span id="jitsiToggleMiniBtn" title="Minimize / Expand" style="opacity:0.75; font-size:12px; margin-left:4px; padding:0 3px; cursor:pointer; font-weight:700;">–</span>
       <span id="jitsiToggleHideBtn" title="Hide Bar" style="opacity:0.75; font-size:13px; margin-left:2px; padding:0 3px; cursor:pointer; font-weight:700;">&times;</span>
     `;
@@ -710,7 +780,7 @@
               </button>
             </div>
             <div id="jitsiVaultCheckpointStatus" style="font-size:10px; color:#94a3b8; margin-top:3px; line-height:1.3;">
-              Audio slices saved to IndexedDB every 5s • Auto-checkpoints every 3 mins
+              Audio slices saved to IndexedDB every 10s • Auto-checkpoints every 3 mins
             </div>
           </div>
 
@@ -722,10 +792,10 @@
         </div>
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <div class="jitsi-ai-ext-section-title" style="margin:0;">3-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">0</span>)</div>
+          <div class="jitsi-ai-ext-section-title" id="jitsiBlockSectionHeader" style="margin:0;">5-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">0</span>)</div>
         </div>
         <div id="jitsiChunksList" style="max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;">
-          <em style="color:#64748b; font-size:11px; padding:6px 0;">3-5 minute speech segments will appear here as participants talk...</em>
+          <em style="color:#64748b; font-size:11px; padding:6px 0;">5-minute speech segments will appear here as participants talk...</em>
         </div>
       </div>
 
@@ -777,6 +847,23 @@
           </div>
           <input type="password" id="jitsiGeminiKeyInput" placeholder="Enter Gemini API Key" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <button id="jitsiSaveGeminiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="width:100%; font-size:11px;">💾 Save Gemini Key</button>
+        </div>
+
+        <div class="jitsi-ai-ext-section-title">Audio Chunk Duration</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:600; color:#fff;">Preemptive Processing Chunk Size</span>
+            <span id="jitsiChunkDurationBadge" class="jitsi-ai-badge" style="font-size:10px; color:#818cf8;">5 Minutes</span>
+          </div>
+          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+            Audio blocks are sealed and transcribed with Gemini Flash in the background every few minutes during the call.
+          </p>
+          <select id="jitsiChunkDurationSelect" style="width:100%; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; cursor:pointer;">
+            <option value="3">3 Minutes per chunk</option>
+            <option value="4">4 Minutes per chunk</option>
+            <option value="5" selected>5 Minutes per chunk (Default)</option>
+            <option value="6">6 Minutes per chunk</option>
+          </select>
         </div>
 
         <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Config</div>
@@ -916,6 +1003,24 @@
       };
     }
 
+    const durationSelect = getEl('jitsiChunkDurationSelect');
+    if (durationSelect) {
+      durationSelect.value = String(savedBlockDurationMins);
+      durationSelect.onchange = () => {
+        savedBlockDurationMins = Number(durationSelect.value) || 5;
+        saveSettings();
+        Recorder.setBlockDuration(savedBlockDurationMins);
+        const badge = getEl('jitsiChunkDurationBadge');
+        if (badge) badge.textContent = `${savedBlockDurationMins} Minutes`;
+        const header = getEl('jitsiBlockSectionHeader');
+        if (header) {
+          const count = getEl('jitsiChunkCountBadge')?.textContent || '0';
+          header.innerHTML = `${savedBlockDurationMins}-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">${count}</span>)`;
+        }
+        showToast(`Chunk duration set to ${savedBlockDurationMins} minutes!`);
+      };
+    }
+
     getEl('jitsiSelectAcc0').onclick = () => selectAccount(0);
     getEl('jitsiSelectAcc1').onclick = () => selectAccount(1);
     getEl('jitsiSaveAccBtn').onclick = saveActiveAccountDetails;
@@ -954,6 +1059,16 @@
     if (tokenInput) tokenInput.value = currentAcc.token || '';
     if (folderInput) folderInput.value = currentAcc.folderName || 'Jitsi_Meetings';
     if (geminiInput) geminiInput.value = geminiApiKey || '';
+
+    const durBadge = getEl('jitsiChunkDurationBadge');
+    if (durBadge) durBadge.textContent = `${savedBlockDurationMins} Minutes`;
+    const durSelect = getEl('jitsiChunkDurationSelect');
+    if (durSelect) durSelect.value = String(savedBlockDurationMins);
+    const blockHeader = getEl('jitsiBlockSectionHeader');
+    if (blockHeader) {
+      const count = getEl('jitsiChunkCountBadge')?.textContent || '0';
+      blockHeader.innerHTML = `${savedBlockDurationMins}-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">${count}</span>)`;
+    }
   }
 
   function saveActiveAccountDetails() {

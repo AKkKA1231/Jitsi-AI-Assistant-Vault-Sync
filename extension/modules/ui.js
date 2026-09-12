@@ -23,6 +23,12 @@
     return d.innerHTML;
   }
 
+  function formatSec(s) {
+    const min = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  }
+
   function showToast(msg, isError = false) {
     let toast = document.getElementById('jitsiAiToast');
     if (!toast) {
@@ -64,8 +70,8 @@
       recBtn.textContent = '⏹️ Stop & Prepare Notes';
       recBtn.classList.replace('jitsi-ai-ext-btn-primary', 'jitsi-ai-ext-btn-secondary');
       recBtn.style.display = 'inline-flex';
-    } else if (state === 'ready') {
-      recBtn.textContent = '🔴 Start Recording';
+    } else if (state === 'idle' || state === 'ready') {
+      recBtn.textContent = '🔴 Start Recording Everyone';
       recBtn.classList.replace('jitsi-ai-ext-btn-secondary', 'jitsi-ai-ext-btn-primary');
       recBtn.style.display = 'inline-flex';
     } else if (state === 'record_again') {
@@ -75,25 +81,123 @@
     }
   }
 
-  function renderChunkItem(chunk) {
+  /**
+   * Renders active in-progress block progress card
+   */
+  function renderActiveBlockProgress({ blockIndex, elapsedSec, totalSec, startSec }) {
     const list = getEl('jitsiChunksList');
     if (!list) return;
     const placeholder = list.querySelector('em');
     if (placeholder) placeholder.remove();
 
-    const item = document.createElement('div');
-    item.style.cssText = 'background:rgba(30,41,59,0.7); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:6px 10px; font-size:11px; display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;';
-    item.innerHTML = `
-      <div>
-        <span style="color:#818cf8; font-weight:700;">3-Min Block #${chunk.index}</span>
-        <span style="color:#64748b; font-size:10px; margin-left:6px;">${chunk.timestamp}</span>
+    let activeCard = getEl('jitsiActiveBlockCard');
+    if (!activeCard) {
+      activeCard = document.createElement('div');
+      activeCard.id = 'jitsiActiveBlockCard';
+      activeCard.style.cssText = 'background:rgba(99,102,241,0.08); border:1px dashed rgba(99,102,241,0.5); border-radius:6px; padding:7px 10px; font-size:11px; margin-bottom:6px;';
+      list.prepend(activeCard);
+    }
+
+    const startFormatted = formatSec(startSec);
+    const endFormatted = formatSec(startSec + totalSec);
+    const progressPct = Math.min(100, Math.round((elapsedSec / totalSec) * 100));
+
+    activeCard.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+        <div>
+          <span style="color:#a5b4fc; font-weight:700;">Block #${blockIndex} (Recording)</span>
+          <span style="color:#94a3b8; font-size:10px; margin-left:6px;">[${startFormatted} - ${endFormatted}]</span>
+        </div>
+        <span class="jitsi-ai-badge" style="background:rgba(239,68,68,0.2); color:#fca5a5; border:1px solid rgba(239,68,68,0.4); font-size:10px; padding:2px 6px; border-radius:10px;">
+          ⏳ ${formatSec(elapsedSec)} / ${formatSec(totalSec)}
+        </span>
       </div>
-      <span class="jitsi-ai-stats-pill">${chunk.sizeKb} KB (Voice Only)</span>
+      <div style="width:100%; height:3px; background:rgba(255,255,255,0.08); border-radius:2px; overflow:hidden;">
+        <div style="width:${progressPct}%; height:100%; background:#6366f1; transition:width 0.3s ease;"></div>
+      </div>
     `;
-    list.prepend(item);
+  }
+
+  /**
+   * Renders completed 3-6 minute block in the sidebar
+   */
+  function renderBlockItem(block, status = 'transcribing') {
+    const list = getEl('jitsiChunksList');
+    if (!list) return;
+
+    // Remove active card placeholder if it matches this block
+    const activeCard = getEl('jitsiActiveBlockCard');
+    if (activeCard) activeCard.remove();
+
+    const placeholder = list.querySelector('em');
+    if (placeholder) placeholder.remove();
+
+    let item = getEl(`block_card_${block.index}`);
+    if (!item) {
+      item = document.createElement('div');
+      item.id = `block_card_${block.index}`;
+      item.className = 'jitsi-ai-block-card';
+      item.style.cssText = 'background:rgba(30,41,59,0.7); border:1px solid rgba(255,255,255,0.08); border-radius:6px; padding:7px 10px; font-size:11px; margin-bottom:5px;';
+      list.prepend(item);
+    }
+
+    const isReady = status === 'completed';
+    const statusHtml = isReady
+      ? `<span id="block_status_${block.index}" class="jitsi-ai-badge" style="background:rgba(16,185,129,0.2); color:#34d399; border:1px solid rgba(16,185,129,0.4); font-size:10px; padding:2px 7px; border-radius:10px;">✅ Transcribed</span>`
+      : `<span id="block_status_${block.index}" class="jitsi-ai-badge" style="background:rgba(99,102,241,0.2); color:#a5b4fc; border:1px solid rgba(99,102,241,0.4); font-size:10px; padding:2px 7px; border-radius:10px;">⚡ Transcribing in Background...</span>`;
+
+    item.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">
+        <div>
+          <span style="color:#818cf8; font-weight:700;">Block #${block.index}</span>
+          <span style="color:#cbd5e1; font-size:11px; font-weight:600; margin-left:6px;">[${block.startTime} - ${block.endTime}]</span>
+        </div>
+        ${statusHtml}
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; font-size:10px; color:#94a3b8;">
+        <span>${block.sizeKb || 'Clean'} KB Audio</span>
+        <span id="block_preview_${block.index}" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#e2e8f0; font-style:italic;">
+          ${block.preview ? `"${escapeHtml(block.preview)}"` : 'Audio secured in vault'}
+        </span>
+      </div>
+    `;
 
     const badge = getEl('jitsiChunkCountBadge');
-    if (badge) badge.textContent = list.children.length;
+    if (badge) {
+      const realCards = list.querySelectorAll('.jitsi-ai-block-card');
+      badge.textContent = realCards.length;
+    }
+  }
+
+  function updateBlockStatus(blockIndex, status, transcriptPreview = '') {
+    const statusEl = getEl(`block_status_${blockIndex}`);
+    if (statusEl) {
+      if (status === 'completed') {
+        statusEl.style.background = 'rgba(16,185,129,0.2)';
+        statusEl.style.color = '#34d399';
+        statusEl.style.borderColor = 'rgba(16,185,129,0.4)';
+        statusEl.textContent = '✅ Transcribed';
+      } else {
+        statusEl.textContent = status;
+      }
+    }
+
+    if (transcriptPreview) {
+      const prevEl = getEl(`block_preview_${blockIndex}`);
+      if (prevEl) {
+        prevEl.textContent = `"${transcriptPreview.slice(0, 60)}..."`;
+      }
+    }
+  }
+
+  // Alias for backward compatibility
+  function renderChunkItem(chunk) {
+    renderBlockItem({
+      index: chunk.index,
+      startTime: chunk.timestamp || '00:00',
+      endTime: 'Saved',
+      sizeKb: chunk.sizeKb
+    }, 'completed');
   }
 
   function renderMeetingNotes(decList, actList, transcriptText) {
@@ -139,38 +243,44 @@
           </div>
           <button id="jitsiDismissRecoveryBtn" style="background:transparent; border:none; color:#94a3b8; font-size:14px; cursor:pointer; line-height:1;" title="Dismiss">&times;</button>
         </div>
-        <div style="color:#cbd5e1; font-size:11px; margin-bottom:8px; line-height:1.4;">
-          Found <strong>${latest.chunks.length} chunks</strong> (${totalKb} KB) from room <code>${escapeHtml(latest.roomName)}</code>.
+        <div style="font-size:11px; color:#cbd5e1; margin-bottom:6px;">
+          Found <strong>${latest.chunkCount || latest.chunks?.length || 0} audio chunks</strong> (${totalKb} KB) from previous session.
         </div>
         <div style="display:flex; gap:6px;">
-          <button id="jitsiTranscribeRecoveredBtn" class="jitsi-ai-ext-btn-primary" style="padding:4px 10px; font-size:11px;">
-            ✨ Transcribe Recovered Call
+          <button id="jitsiRecoverTranscribeBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="padding:4px 8px; font-size:10px; flex:1;">
+            ⚡ Transcribe Recovered
           </button>
-          <button id="jitsiDownloadRecoveredBtn" class="jitsi-ai-ext-btn-secondary" style="padding:4px 10px; font-size:11px;">
-            💾 Save Audio (.webm)
+          <button id="jitsiRecoverDownloadBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="padding:4px 8px; font-size:10px; flex:1;">
+            💾 Download Audio
           </button>
         </div>
       </div>
     `;
 
-    const dismissBtn = getEl('jitsiDismissRecoveryBtn');
-    if (dismissBtn) dismissBtn.onclick = onDismiss;
-
-    const transBtn = getEl('jitsiTranscribeRecoveredBtn');
-    if (transBtn) transBtn.onclick = () => onTranscribeRecovered(latest);
-
-    const downBtn = getEl('jitsiDownloadRecoveredBtn');
-    if (downBtn) downBtn.onclick = () => onDownloadRecovered(latest);
+    const transBtn = getEl('jitsiRecoverTranscribeBtn');
+    if (transBtn && onTranscribeRecovered) {
+      transBtn.onclick = () => onTranscribeRecovered(latest);
+    }
+    const downBtn = getEl('jitsiRecoverDownloadBtn');
+    if (downBtn && onDownloadRecovered) {
+      downBtn.onclick = () => onDownloadRecovered(latest);
+    }
+    const disBtn = getEl('jitsiDismissRecoveryBtn');
+    if (disBtn && onDismiss) {
+      disBtn.onclick = () => onDismiss(latest.id);
+    }
   }
 
   return {
-    getEl,
-    escapeHtml,
     showToast,
     switchTab,
     setRecordButtonState,
+    renderActiveBlockProgress,
+    renderBlockItem,
+    updateBlockStatus,
     renderChunkItem,
     renderMeetingNotes,
-    renderRecoveryBanner
+    renderRecoveryBanner,
+    escapeHtml
   };
 });

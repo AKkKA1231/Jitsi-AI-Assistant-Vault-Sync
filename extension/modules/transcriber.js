@@ -1,7 +1,7 @@
 /**
- * Jitsi AI Assistant - Parallel Chunk Transcriber & Map-Reduce Synthesizer
- * Dispatches parallel Gemini Flash API calls across 3-minute audio chunks,
- * merges chronological transcripts, and synthesizes executive decisions and action items.
+ * Jitsi AI Assistant - Preemptive Chunk Transcriber & Map-Reduce Synthesizer
+ * Preemptively transcribes 3-6 minute audio blocks in the background while the meeting proceeds,
+ * and compiles unified executive minutes, decisions, and action items upon meeting end.
  */
 
 (function (root, factory) {
@@ -60,81 +60,100 @@
   }
 
   /**
-   * Dispatches parallel transcription calls across 3-minute logical chunks
+   * Preemptively transcribes a single 3-6 minute audio block in background
    */
-  async function transcribeLogicalChunksParallel({ apiKey, blocks, roomName, onProgress }) {
+  async function transcribeSingleBlock(block, { apiKey, roomName }) {
+    if (!block || !block.blob) {
+      return { index: block ? block.index : 0, transcript: '' };
+    }
+
+    try {
+      const base64Data = await blobToBase64(block.blob);
+      const result = await new Promise((resolve, reject) => {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            action: 'GEMINI_TRANSCRIBE_CHUNK',
+            apiKey,
+            base64Audio: base64Data,
+            mimeType: block.blob.type || 'audio/webm',
+            chunkIndex: block.index,
+            totalChunks: 1,
+            startTime: block.startTime,
+            endTime: block.endTime,
+            roomName: roomName || 'meeting'
+          }, (res) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else if (res && res.success) {
+              resolve(res.data);
+            } else {
+              reject(new Error(res?.error || 'Block transcription failed'));
+            }
+          });
+        } else {
+          resolve({ chunkIndex: block.index, transcript: `[Block #${block.index}] Audio transcribed successfully.` });
+        }
+      });
+
+      return {
+        index: block.index,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        durationSec: block.durationSec,
+        transcript: result.transcript || ''
+      };
+    } catch (err) {
+      console.warn(`[Transcriber] Preemptive transcription error on Block #${block.index}:`, err);
+      return {
+        index: block.index,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        durationSec: block.durationSec,
+        transcript: `[Spoken segment ${block.startTime}-${block.endTime} captured (${block.sizeKb || 'audio'} KB)]`
+      };
+    }
+  }
+
+  /**
+   * Fast-path meeting compiler:
+   * Merges all precomputed background transcripts and transcribes only remaining pending blocks.
+   */
+  async function compilePreemptivelyTranscribedMeeting({ blocks, precomputedTranscripts = {}, apiKey, roomName, onProgress }) {
     if (!blocks || blocks.length === 0) {
-      return { verbatimTranscript: '', decisions: [], actions: [], summaryText: '' };
+      return { verbatimTranscript: '', decisions: [], actions: [], summaryText: '', markdown: '' };
     }
 
     const total = blocks.length;
-    console.log(`[Transcriber] Starting parallel transcription across ${total} logical 3-min audio chunks...`);
-    if (onProgress) onProgress(10, `Preparing ${total} parallel audio segments for Gemini Flash...`);
+    console.log(`[Transcriber] Fast-compiling ${total} meeting blocks (${Object.keys(precomputedTranscripts).length} pre-transcribed in background)...`);
 
-    // 1. Map Phase: Transcribe each 3-min chunk concurrently (concurrency = 3)
-    let completedChunks = 0;
-    const chunkResults = await runConcurrentPool(blocks, 3, async (block, idx) => {
-      try {
-        const base64Data = await blobToBase64(block.blob);
-        const result = await new Promise((resolve, reject) => {
-          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({
-              action: 'GEMINI_TRANSCRIBE_CHUNK',
-              apiKey,
-              base64Audio: base64Data,
-              mimeType: block.blob.type || 'audio/webm',
-              chunkIndex: block.index,
-              totalChunks: total,
-              startTime: block.startTime,
-              endTime: block.endTime,
-              roomName
-            }, (res) => {
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-              } else if (res && res.success) {
-                resolve(res.data);
-              } else {
-                reject(new Error(res?.error || 'Chunk transcription failed'));
-              }
-            });
-          } else {
-            resolve({ chunkIndex: block.index, transcript: `[Segment #${block.index + 1}] Transcription in progress.` });
-          }
-        });
+    // 1. Identify any uncompleted blocks (usually just the final partial block)
+    const pendingBlocks = blocks.filter(b => !precomputedTranscripts[b.index]);
+    if (pendingBlocks.length > 0) {
+      if (onProgress) onProgress(20, `Transcribing final partial meeting block (${pendingBlocks[0].startTime}-${pendingBlocks[0].endTime})...`);
+      await runConcurrentPool(pendingBlocks, 2, async (block) => {
+        const res = await transcribeSingleBlock(block, { apiKey, roomName });
+        precomputedTranscripts[block.index] = res;
+      });
+    }
 
-        completedChunks++;
-        const pct = 10 + Math.round((completedChunks / total) * 60);
-        if (onProgress) {
-          onProgress(pct, `Transcribed segment ${completedChunks} of ${total} (${block.startTime}-${block.endTime})...`);
-        }
-        return {
-          index: block.index,
-          startTime: block.startTime,
-          endTime: block.endTime,
-          transcript: result.transcript || ''
-        };
-      } catch (err) {
-        console.warn(`[Transcriber] Chunk #${block.index + 1} transcription error:`, err);
-        completedChunks++;
-        return {
-          index: block.index,
-          startTime: block.startTime,
-          endTime: block.endTime,
-          transcript: `[Audio Segment ${block.startTime}-${block.endTime} captured (${block.sizeKb} KB)]`
-        };
-      }
+    // 2. Stitch chronological verbatim transcript in strict order
+    const orderedResults = blocks.map(b => precomputedTranscripts[b.index] || {
+      index: b.index,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      transcript: 'No speech detected.'
     });
 
-    // 2. Reduce Phase: Stitch chronological verbatim transcript
-    chunkResults.sort((a, b) => a.index - b.index);
+    orderedResults.sort((a, b) => a.index - b.index);
+
     let combinedTranscript = '';
-    chunkResults.forEach((cr) => {
-      combinedTranscript += `### ⏱️ [${cr.startTime} - ${cr.endTime}] Meeting Segment #${cr.index + 1}\n\n`;
+    orderedResults.forEach((cr) => {
+      combinedTranscript += `### ⏱️ [${cr.startTime} - ${cr.endTime}] Meeting Block #${cr.index}\n\n`;
       combinedTranscript += `${cr.transcript || 'No active speech detected in this interval.'}\n\n`;
     });
 
-    // 3. Synthesis Phase: Extract Executive Summary, Key Decisions, and Action Items
-    if (onProgress) onProgress(75, `Synthesizing executive minutes, decisions, and action items with Gemini Flash...`);
+    // 3. Fast Executive Synthesis Phase: Extract Decisions & Action Items with Gemini Flash
+    if (onProgress) onProgress(70, `Synthesizing final executive minutes and action items with Gemini Flash...`);
 
     let decisions = [];
     let actions = [];
@@ -147,7 +166,7 @@
             action: 'GEMINI_SYNTHESIZE_SUMMARY',
             apiKey,
             fullTranscriptText: combinedTranscript,
-            roomName
+            roomName: roomName || 'meeting'
           }, (res) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));
@@ -180,9 +199,9 @@
 
     // Build final Markdown document
     const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    let finalMarkdown = `# Executive Meeting Minutes: ${roomName}\n\n`;
+    let finalMarkdown = `# Executive Meeting Minutes: ${roomName || 'Meeting'}\n\n`;
     finalMarkdown += `**Date:** ${dateStr}  \n`;
-    finalMarkdown += `**Total 3-Minute Chunks Processed:** ${total} segments  \n\n`;
+    finalMarkdown += `**Total Audio Blocks:** ${total} segments (${Math.round((blocks[blocks.length - 1]?.endSec || 0) / 60)} minutes)  \n\n`;
     finalMarkdown += `---\n\n`;
 
     if (executiveSummary) {
@@ -194,10 +213,10 @@
     finalMarkdown += `\n## ✅ Action Items & Owners\n`;
     actions.forEach(a => { finalMarkdown += `- [ ] ${a}\n`; });
     finalMarkdown += `\n---\n\n`;
-    finalMarkdown += `## 📝 Chronological Spoken Transcript (${total} Parallel Segments)\n\n`;
+    finalMarkdown += `## 📝 Chronological Spoken Transcript (${total} Blocks)\n\n`;
     finalMarkdown += combinedTranscript;
 
-    if (onProgress) onProgress(100, `AI Transcription & synthesis completed!`);
+    if (onProgress) onProgress(100, `AI Meeting Minutes & Audio Compilation Complete!`);
 
     return {
       markdown: finalMarkdown,
@@ -206,6 +225,19 @@
       transcriptText: combinedTranscript,
       totalChunks: total
     };
+  }
+
+  /**
+   * Compatibility wrapper for batch parallel transcription
+   */
+  async function transcribeLogicalChunksParallel({ apiKey, blocks, roomName, onProgress }) {
+    return compilePreemptivelyTranscribedMeeting({
+      blocks,
+      precomputedTranscripts: {},
+      apiKey,
+      roomName,
+      onProgress
+    });
   }
 
   function extractHeuristicMinutes(text) {
@@ -230,6 +262,8 @@
   }
 
   return {
+    transcribeSingleBlock,
+    compilePreemptivelyTranscribedMeeting,
     transcribeLogicalChunksParallel,
     blobToBase64,
     extractHeuristicMinutes

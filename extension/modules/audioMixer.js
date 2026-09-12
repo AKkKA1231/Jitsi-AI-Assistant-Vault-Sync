@@ -69,12 +69,21 @@
     } catch (e) {}
 
     try {
-      const jitsiBtn = document.querySelector('#audio-mute, [data-testid="audio-mute"], [aria-label*="mute audio" i], [aria-label*="unmute audio" i]');
+      const jitsiBtn = document.querySelector(
+        '#audio-mute, [data-testid="audio-mute"], [aria-label*="mute audio" i], [aria-label*="unmute audio" i], [aria-label*="microphone" i], [aria-label*="mic" i]'
+      );
       if (jitsiBtn) {
         const label = (jitsiBtn.getAttribute('aria-label') || '').toLowerCase();
-        const classList = jitsiBtn.className || '';
-        if (label.includes('unmute') || classList.includes('toggled') || classList.includes('selected') || classList.includes('muted')) {
+        const classList = (jitsiBtn.className || '').toLowerCase();
+        const ariaPressed = jitsiBtn.getAttribute('aria-pressed');
+
+        // If aria-label says 'unmute', or button has toggled/selected/muted classes, or aria-pressed is true/false depending on button
+        if (label.includes('unmute') || classList.includes('toggled') || classList.includes('selected') || classList.includes('muted') || classList.includes('audio-muted')) {
           return true;
+        }
+        if (label.includes('mute audio') || label.includes('turn off mic')) {
+          // 'mute audio' action means currently UNMUTED (action will mute it)
+          return false;
         }
       }
     } catch (e) {}
@@ -85,36 +94,45 @@
   /**
    * Synchronizes local microphone capture with meeting mute status.
    * If mic is off, gain is set to 0 and tracks are silenced immediately.
+   * When user unmutes, gain is restored to 1 and tracks are enabled.
    */
   function syncLocalMicState() {
-    if (!micGainNode || !audioCtx) return;
-
     const shouldMute = isMeetingMicMuted();
     if (shouldMute !== isLocalMicMuted) {
       isLocalMicMuted = shouldMute;
       if (isLocalMicMuted) {
-        // Zero gain immediately so no audio data reaches mixerDest or analyser
-        try { micGainNode.gain.setValueAtTime(0, audioCtx.currentTime); } catch (e) {}
+        // Zero gain immediately and disable tracks so zero local audio is recorded
+        if (micGainNode && audioCtx) {
+          try { micGainNode.gain.setValueAtTime(0, audioCtx.currentTime); } catch (e) {}
+        }
         if (micStream) {
           micStream.getAudioTracks().forEach(track => { track.enabled = false; });
         }
-        console.log('[Audio Mixer] Meeting mic is OFF -> silenced local audio capture.');
+        console.log('[Audio Mixer] User is MUTED -> local audio stream completely cut from recording.');
       } else {
+        // User actively unmuted themselves -> re-enable tracks and restore gain
         if (micStream) {
           micStream.getAudioTracks().forEach(track => { track.enabled = true; });
         }
-        try { micGainNode.gain.setValueAtTime(1, audioCtx.currentTime); } catch (e) {}
-        console.log('[Audio Mixer] Meeting mic is ON -> resumed local audio capture.');
+        if (micGainNode && audioCtx) {
+          try { micGainNode.gain.setValueAtTime(1, audioCtx.currentTime); } catch (e) {}
+        }
+        console.log('[Audio Mixer] User UNMUTED -> resumed recording user audio.');
       }
     }
+
+    if (!audioCtx) return isLocalMicMuted;
 
     // Update UI speaker badge
     const badge = document.getElementById('jitsiSpeakerCountBadge');
     if (badge) {
       const remoteCount = connectedAudioElements.size;
-      badge.textContent = isLocalMicMuted
+      const targetText = isLocalMicMuted
         ? `🔇 You Muted (${remoteCount} Remote)`
         : `🎙️ You + ${remoteCount} Remote`;
+      if (badge.textContent !== targetText) {
+        badge.textContent = targetText;
+      }
     }
   }
 

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "npx serve . -l 3000",
     "dev": "npx serve . -l 3000",
-    "test": "node test_modules.mjs && node test_drive_upload.mjs"
+    "test": "node test_modules.mjs && node test_drive_upload.mjs && node test_preemptive_chunking.mjs"
   },
   "keywords": [
     "jitsi",
