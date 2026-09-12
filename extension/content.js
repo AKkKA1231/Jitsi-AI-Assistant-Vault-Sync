@@ -586,120 +586,156 @@
     sidebar.id = 'jitsi-ai-sidebar';
     sidebar.className = 'jitsi-ai-sidebar';
     sidebar.innerHTML = `
-      <div class="jitsi-ai-header">
-        <div class="jitsi-ai-title-wrap">
-          <span class="jitsi-ai-logo-icon">✨</span>
-          <h2 class="jitsi-ai-title">Jitsi AI Assistant &amp; Vault</h2>
+      <!-- Header -->
+      <div class="jitsi-ai-ext-header jitsi-ai-header">
+        <div class="jitsi-ai-ext-title jitsi-ai-title-wrap">
+          <span style="font-size:16px;">✨</span>
+          <span>Jitsi &amp; Meet AI Assistant</span>
         </div>
-        <button id="jitsiCloseSidebarBtn" class="jitsi-ai-icon-btn" title="Close Drawer">&times;</button>
+        <button id="jitsiCloseSidebarBtn" class="jitsi-ai-ext-close jitsi-ai-icon-btn" title="Close Drawer">&times;</button>
       </div>
 
+      <!-- Active Drive Target Bar -->
+      <div class="jitsi-ai-ext-drive-bar">
+        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px;">
+          <span>Target:</span> <strong id="jitsiDriveAccName" style="color:#f8fafc;">Account 1</strong>
+          <span id="jitsiDriveEmailDisplay" style="font-size:10px; opacity:0.8; display:block;">Folder: Jitsi_Meetings</span>
+        </div>
+        <button class="jitsi-ai-ext-switch-btn" id="jitsiSwitchAccBtn" title="Switch Account">⚙️ Accounts</button>
+      </div>
+
+      <!-- Live VAD Status & Volume Bar -->
+      <div class="jitsi-ai-vad-bar">
+        <div class="jitsi-ai-vad-status">
+          <span class="jitsi-ai-vad-dot" id="jitsiVadDot"></span>
+          <span id="jitsiVadLabel" style="font-weight:600;">Standby</span>
+        </div>
+        <div class="jitsi-ai-volume-meter" title="Live audio volume of all participants">
+          <div class="jitsi-ai-volume-fill" id="jitsiVolumeFill"></div>
+        </div>
+        <div style="display:flex; gap:5px; align-items:center;">
+          <span class="jitsi-ai-stats-pill" id="jitsiAudioStats">00:00 clean</span>
+          <button id="jitsiMicMuteToggleBtn" class="jitsi-ai-ext-switch-btn" style="padding:1px 6px; font-size:10px;" title="Click to manually force-mute your mic in recording">🎤 Sync: Auto</button>
+        </div>
+      </div>
+
+      <!-- Interruption Recovery Alert Area -->
       <div id="jitsiRecoveryArea"></div>
 
       <!-- Navigation Tabs -->
-      <nav class="jitsi-ai-nav-tabs">
-        <button id="jitsiTabBtn_audio" class="jitsi-ai-tab-btn active">🎙️ Live Audio</button>
-        <button id="jitsiTabBtn_notes" class="jitsi-ai-tab-btn">📝 AI Minutes</button>
-        <button id="jitsiTabBtn_settings" class="jitsi-ai-tab-btn">⚙️ Settings</button>
-      </nav>
+      <div class="jitsi-ai-ext-tabs jitsi-ai-nav-tabs">
+        <button id="jitsiTabBtn_audio" class="jitsi-ai-ext-tab jitsi-ai-tab-btn active" data-tab="audio">🎙️ Live Audio</button>
+        <button id="jitsiTabBtn_notes" class="jitsi-ai-ext-tab jitsi-ai-tab-btn" data-tab="notes">📝 AI Minutes</button>
+        <button id="jitsiTabBtn_settings" class="jitsi-ai-ext-tab jitsi-ai-tab-btn" data-tab="settings">⚙️ Settings</button>
+      </div>
 
-      <!-- TAB 1: Live Audio & VAD -->
-      <div id="jitsiTabContent_audio" class="jitsi-ai-tab-content" style="display:block;">
-        <div class="jitsi-ai-card">
+      <!-- TAB 1: Live Audio & VAD Panel -->
+      <div id="jitsiTabContent_audio" class="jitsi-ai-ext-content jitsi-ai-tab-content" style="display:block;">
+        <div class="jitsi-ai-ext-card jitsi-ai-card">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <div style="font-weight:700; font-size:13px; color:#fff;">Audio &amp; Voice Activity</div>
-            <div style="display:flex; gap:6px; align-items:center;">
-              <button id="jitsiMicMuteToggleBtn" class="jitsi-ai-ext-btn-secondary" style="padding:2px 7px; font-size:10px; height:22px; cursor:pointer;" title="Click to manually mute/unmute local mic in recording">🎤 Sync: Auto</button>
-              <span id="jitsiSpeakerCountBadge" class="jitsi-ai-badge">You</span>
+            <span style="font-size:12px; font-weight:700; color:#fff;">Multi-Speaker Audio Capture</span>
+            <span class="jitsi-ai-stats-pill" id="jitsiSpeakerCountBadge">You + 0 Remote</span>
+          </div>
+          <p style="font-size:11px; color:#94a3b8; line-height:1.4; margin:0 0 10px 0;">
+            Captures <strong>all call participants</strong> via WebRTC mixer. Silence is filtered in real-time, and your voice is automatically silenced whenever your meeting mic is off.
+          </p>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:6px; font-size:11px; margin-bottom:10px;">
+            <div style="background:rgba(15,23,42,0.6); padding:6px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.06);">
+              <span style="color:#94a3b8; display:block; font-size:10px;">Active Speech:</span>
+              <strong id="jitsiCleanSpeechTime" style="color:#34d399; font-size:12px;">00:00</strong>
+            </div>
+            <div style="background:rgba(15,23,42,0.6); padding:6px 8px; border-radius:4px; border:1px solid rgba(255,255,255,0.06);">
+              <span style="color:#94a3b8; display:block; font-size:10px;">Silence Skipped:</span>
+              <strong id="jitsiSilenceRatio" style="color:#818cf8; font-size:12px;">0% saved</strong>
             </div>
           </div>
 
-          <div class="jitsi-ai-volume-meter">
-            <div id="jitsiVolumeFill" class="jitsi-ai-volume-fill"></div>
+          <!-- Fault-Tolerant Audio Vault Status -->
+          <div style="background:rgba(15,23,42,0.6); padding:8px 10px; border-radius:6px; margin-bottom:10px; border:1px solid rgba(16,185,129,0.25);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:11px; color:#10b981; font-weight:600; display:flex; align-items:center; gap:4px;">
+                <span>🔒</span> Fault-Tolerant Audio Vault Active
+              </span>
+              <button id="jitsiManualCheckpointBtn" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#cbd5e1; font-size:10px; padding:3px 7px; border-radius:4px; cursor:pointer;" title="Force immediate checkpoint save to disk">
+                💾 Save Checkpoint
+              </button>
+            </div>
+            <div id="jitsiVaultCheckpointStatus" style="font-size:10px; color:#94a3b8; margin-top:3px; line-height:1.3;">
+              Audio slices saved to IndexedDB every 5s • Auto-checkpoints every 3 mins
+            </div>
           </div>
 
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-            <div style="display:flex; align-items:center; gap:6px;">
-              <span id="jitsiVadDot" class="jitsi-ai-vad-dot"></span>
-              <span id="jitsiVadLabel" style="font-size:11px; color:#94a3b8;">Ready</span>
-            </div>
-            <div style="display:flex; gap:6px;">
-              <span id="jitsiAudioStats" class="jitsi-ai-stats-pill">00:00 clean</span>
-              <span id="jitsiSilenceRatio" class="jitsi-ai-stats-pill">0% saved</span>
-            </div>
-          </div>
-
-          <div id="jitsiVaultCheckpointStatus" style="font-size:10px; color:#64748b; margin-top:8px;">
-            💾 Vault Active: 5s resilient disk safety slicing
+          <div style="display:flex; gap:8px;">
+            <button id="jitsiToggleRecordBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1;">
+              🔴 Start Recording Everyone
+            </button>
           </div>
         </div>
 
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div class="jitsi-ai-ext-section-title" style="margin:0;">3-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">0</span>)</div>
+        </div>
+        <div id="jitsiChunksList" style="max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;">
+          <em style="color:#64748b; font-size:11px; padding:6px 0;">3-5 minute speech segments will appear here as participants talk...</em>
+        </div>
+      </div>
+
+      <!-- TAB 2: AI Minutes & Tasks Panel -->
+      <div id="jitsiTabContent_notes" class="jitsi-ai-ext-content jitsi-ai-tab-content" style="display:none;">
         <div style="display:flex; gap:8px; margin-bottom:12px;">
-          <button id="jitsiToggleRecordBtn" class="jitsi-ai-ext-btn-primary" style="flex:1;">
-            🔴 Start Recording
+          <button id="jitsiDownloadAudioBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; padding:8px 10px; font-size:11px;">
+            <span>🎵</span><span>Download Audio (.webm)</span>
+          </button>
+          <button id="jitsiDownloadMdBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; padding:8px 10px; font-size:11px;">
+            <span>📄</span><span>Download Notes (.md)</span>
           </button>
         </div>
 
-        <!-- 3-Minute Logical Audio Blocks -->
-        <div class="jitsi-ai-card">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <div style="font-weight:700; font-size:12px; color:#fff;">3-Minute Parallel Speech Blocks</div>
-            <span id="jitsiChunkCountBadge" class="jitsi-ai-badge">0</span>
-          </div>
-          <div id="jitsiChunksList" style="max-height:160px; overflow-y:auto;">
-            <em style="color:#64748b; font-size:11px;">Blocks will appear here as speech is captured...</em>
-          </div>
-        </div>
-      </div>
-
-      <!-- TAB 2: AI Minutes & Verbatim Transcript -->
-      <div id="jitsiTabContent_notes" class="jitsi-ai-tab-content" style="display:none;">
-        <div class="jitsi-ai-card">
-          <div style="font-weight:700; font-size:12px; color:#10b981; margin-bottom:6px;">🎯 Key Decisions</div>
-          <div id="jitsiDecisionsBox">
-            <em style="color:#64748b; font-size:11px;">Decisions will appear here after transcription...</em>
-          </div>
-        </div>
-
-        <div class="jitsi-ai-card">
-          <div style="font-weight:700; font-size:12px; color:#818cf8; margin-bottom:6px;">✅ Action Items &amp; Owners</div>
-          <div id="jitsiActionsBox">
-            <em style="color:#64748b; font-size:11px;">Tasks will appear here after transcription...</em>
-          </div>
-        </div>
-
-        <div class="jitsi-ai-card">
-          <div style="font-weight:700; font-size:12px; color:#fff; margin-bottom:6px;">📝 Spoken Transcript</div>
-          <div id="jitsiTranscriptBox" style="max-height:200px; overflow-y:auto; font-size:12px; line-height:1.6; color:#cbd5e1;">
-            <em style="color:#64748b; font-size:11px;">Capturing speech in real-time...</em>
-          </div>
-        </div>
-
-        <div id="jitsiAudioPlayerBox" class="jitsi-ai-card" style="display:none;">
+        <div id="jitsiAudioPlayerBox" class="jitsi-ai-ext-card jitsi-ai-card" style="display:none; padding:10px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <span style="font-size:11px; font-weight:700; color:#fff;">Meeting Audio Player</span>
+            <span style="font-size:11px; font-weight:700; color:#34d399;">🎧 Listen to Meeting Audio</span>
             <span id="jitsiAudioPlayerSize" style="font-size:10px; color:#94a3b8;"></span>
           </div>
-          <audio id="jitsiAudioPlayer" controls style="width:100%; height:32px;"></audio>
+          <audio id="jitsiAudioPlayer" controls style="width:100%; height:32px; outline:none; border-radius:4px;"></audio>
+        </div>
+
+        <div class="jitsi-ai-ext-section-title">🎯 Key Decisions</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" id="jitsiDecisionsBox">
+          <em style="color:#64748b; font-size:11px;">Decisions will appear here after speech is transcribed...</em>
+        </div>
+
+        <div class="jitsi-ai-ext-section-title">✅ Action Items &amp; Owners</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" id="jitsiActionsBox">
+          <em style="color:#64748b; font-size:11px;">Action items will appear here with interactive checkboxes...</em>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <div class="jitsi-ai-ext-section-title" style="margin:0;">Full Meeting Transcript</div>
+          <button id="jitsiCopyTranscriptBtn" class="jitsi-ai-ext-switch-btn" style="font-size:10px; padding:2px 8px;">📋 Copy Text</button>
+        </div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" id="jitsiTranscriptBox" style="max-height:180px; overflow-y:auto; font-size:12px; color:#cbd5e1; line-height:1.5;">
+          <em style="color:#64748b; font-size:11px;">Transcript will appear here...</em>
         </div>
       </div>
 
-      <!-- TAB 3: Multi-Account Google Drive Settings -->
-      <div id="jitsiTabContent_settings" class="jitsi-ai-tab-content" style="display:none;">
-        <div class="jitsi-ai-card">
+      <!-- TAB 3: Settings Panel -->
+      <div id="jitsiTabContent_settings" class="jitsi-ai-ext-content jitsi-ai-tab-content" style="display:none;">
+        <div class="jitsi-ai-ext-section-title">Gemini AI Transcription</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <div style="font-weight:700; font-size:12px; color:#fff;">Gemini Flash API Key</div>
+            <span style="font-size:11px; font-weight:600; color:#fff;">Gemini Flash API Key</span>
             <span id="jitsiAiKeyBadge" class="jitsi-ai-badge" style="font-size:10px;">No Key</span>
           </div>
-          <input type="password" id="jitsiGeminiKeyInput" placeholder="Enter Gemini Flash API Key" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
-          <button id="jitsiSaveGeminiKeyBtn" class="jitsi-ai-ext-btn-secondary" style="width:100%; font-size:11px;">💾 Save Gemini Key</button>
+          <input type="password" id="jitsiGeminiKeyInput" placeholder="Enter Gemini API Key" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
+          <button id="jitsiSaveGeminiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="width:100%; font-size:11px;">💾 Save Gemini Key</button>
         </div>
 
-        <div class="jitsi-ai-card">
-          <div style="font-weight:700; font-size:12px; color:#fff; margin-bottom:8px;">Google Drive Multi-Account Switcher</div>
-          <div style="display:flex; gap:6px; margin-bottom:10px;">
-            <button id="jitsiSelectAcc0" class="jitsi-ai-ext-btn-primary" style="flex:1; font-size:11px;">Account 1</button>
-            <button id="jitsiSelectAcc1" class="jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">Account 2</button>
+        <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Config</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card">
+          <div class="jitsi-ai-pill-row" style="display:flex; gap:6px; margin-bottom:10px;">
+            <button id="jitsiSelectAcc0" class="jitsi-ai-pill-btn active" style="flex:1;">Account 1 (Primary)</button>
+            <button id="jitsiSelectAcc1" class="jitsi-ai-pill-btn" style="flex:1;">Account 2 (Backup)</button>
           </div>
           <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Google Apps Script Webhook URL:</div>
           <input type="url" id="jitsiAccWebhookInput" placeholder="https://script.google.com/macros/s/.../exec" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
@@ -707,33 +743,29 @@
           <input type="password" id="jitsiAccTokenInput" placeholder="ya29..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Target Drive Folder Name:</div>
           <input type="text" id="jitsiAccFolderInput" placeholder="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
-          <button id="jitsiSaveAccBtn" class="jitsi-ai-ext-btn-primary" style="width:100%; font-size:11px;">💾 Save Account Settings</button>
+          <button id="jitsiSaveAccBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="width:100%; font-size:11px;">💾 Save Account Settings</button>
         </div>
       </div>
 
-      <!-- Upload Status & Actions Area -->
-      <div id="jitsiUploadBox" class="jitsi-ai-card" style="display:none; margin-top:auto;">
+      <!-- Upload Progress Overlay Box -->
+      <div id="jitsiUploadBox" class="jitsi-ai-ext-card jitsi-ai-card" style="display:none; margin:0 16px 8px 16px; border-color:#10b981;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <span style="font-size:11px; font-weight:700; color:#fff;">Google Drive Package Sync</span>
           <button id="jitsiCloseUploadBox" style="background:none; border:none; color:#64748b; cursor:pointer; font-size:14px;">&times;</button>
         </div>
-        <div class="jitsi-ai-volume-meter" style="margin-bottom:6px;">
-          <div id="jitsiUploadProgressBar" class="jitsi-ai-volume-fill" style="width:0%; background:#10b981;"></div>
+        <div class="jitsi-ai-progress-track">
+          <div id="jitsiUploadProgressBar" class="jitsi-ai-progress-bar"></div>
         </div>
         <div id="jitsiUploadStatusText" style="font-size:11px; color:#cbd5e1; margin-bottom:8px;">Preparing package...</div>
         <div id="jitsiUploadActions" style="display:flex; flex-direction:column; gap:6px;">
-          <a id="jitsiOpenDriveLink" href="#" target="_blank" class="jitsi-ai-ext-btn-primary" style="text-align:center; text-decoration:none; display:none;">📂 Open in Google Drive</a>
-          <div style="display:flex; gap:6px;">
-            <button id="jitsiDownloadAudioBtn" class="jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🎵 Audio (.webm)</button>
-            <button id="jitsiDownloadMdBtn" class="jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">📄 Summary (.md)</button>
-          </div>
+          <a id="jitsiOpenDriveLink" href="#" target="_blank" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="text-align:center; text-decoration:none; display:none;">📂 Open in Google Drive</a>
         </div>
       </div>
 
-      <!-- Bottom Action Bar -->
-      <div class="jitsi-ai-footer-bar">
-        <button id="jitsiTranscribeBtn" class="jitsi-ai-ext-btn-secondary" style="flex:1; font-size:12px;">✨ Transcribe Call</button>
-        <button id="jitsiUploadBtn" class="jitsi-ai-ext-btn-primary" style="flex:1; font-size:12px;">☁️ Upload to Drive</button>
+      <!-- Bottom Action Footer Bar -->
+      <div class="jitsi-ai-ext-footer jitsi-ai-footer-bar">
+        <button id="jitsiTranscribeBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:12px;">✨ Transcribe Call</button>
+        <button id="jitsiUploadBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; font-size:12px;">☁️ Upload to Drive</button>
       </div>
     </aside>
     `;
@@ -813,6 +845,29 @@
       };
     }
 
+    const switchAccBtn = getEl('jitsiSwitchAccBtn');
+    if (switchAccBtn) switchAccBtn.onclick = () => UI.switchTab('settings');
+
+    const checkpointBtn = getEl('jitsiManualCheckpointBtn');
+    if (checkpointBtn) {
+      checkpointBtn.onclick = () => {
+        saveVaultCheckpoint();
+        showToast('Vault checkpoint saved manually.');
+      };
+    }
+
+    const copyTransBtn = getEl('jitsiCopyTranscriptBtn');
+    if (copyTransBtn) {
+      copyTransBtn.onclick = () => {
+        const text = (getEl('jitsiTranscriptBox')?.innerText || '').trim();
+        if (text && !text.includes('Transcript will appear here')) {
+          navigator.clipboard.writeText(text).then(() => showToast('Transcript copied to clipboard!')).catch(() => showToast('Failed to copy', true));
+        } else {
+          showToast('No transcript text available yet', true);
+        }
+      };
+    }
+
     getEl('jitsiSelectAcc0').onclick = () => selectAccount(0);
     getEl('jitsiSelectAcc1').onclick = () => selectAccount(1);
     getEl('jitsiSaveAccBtn').onclick = saveActiveAccountDetails;
@@ -833,15 +888,22 @@
   function updateAccountUI() {
     const acc0 = getEl('jitsiSelectAcc0');
     const acc1 = getEl('jitsiSelectAcc1');
-    if (acc0) acc0.className = activeAccIdx === 0 ? 'jitsi-ai-ext-btn-primary' : 'jitsi-ai-ext-btn-secondary';
-    if (acc1) acc1.className = activeAccIdx === 1 ? 'jitsi-ai-ext-btn-primary' : 'jitsi-ai-ext-btn-secondary';
+    if (acc0) acc0.className = activeAccIdx === 0 ? 'jitsi-ai-pill-btn active' : 'jitsi-ai-pill-btn';
+    if (acc1) acc1.className = activeAccIdx === 1 ? 'jitsi-ai-pill-btn active' : 'jitsi-ai-pill-btn';
 
     const currentAcc = accounts[activeAccIdx] || accounts[0];
+    const driveName = getEl('jitsiDriveAccName');
+    const driveEmail = getEl('jitsiDriveEmailDisplay');
+    if (driveName) driveName.textContent = currentAcc.name || `Account ${activeAccIdx + 1}`;
+    if (driveEmail) driveEmail.textContent = `Folder: ${currentAcc.folderName || 'Jitsi_Meetings'}`;
+
     const webInput = getEl('jitsiAccWebhookInput');
+    const tokenInput = getEl('jitsiAccTokenInput');
     const folderInput = getEl('jitsiAccFolderInput');
     const geminiInput = getEl('jitsiGeminiKeyInput');
 
     if (webInput) webInput.value = currentAcc.webhookUrl || '';
+    if (tokenInput) tokenInput.value = currentAcc.token || '';
     if (folderInput) folderInput.value = currentAcc.folderName || 'Jitsi_Meetings';
     if (geminiInput) geminiInput.value = geminiApiKey || '';
   }

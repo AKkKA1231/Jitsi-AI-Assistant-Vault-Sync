@@ -41,12 +41,18 @@
   }
 
   function switchTab(tabId) {
-    const tabs = ['audio', 'notes', 'settings'];
-    tabs.forEach(t => {
-      const btn = getEl(`jitsiTabBtn_${t}`);
-      const content = getEl(`jitsiTabContent_${t}`);
-      if (btn) btn.classList.toggle('active', t === tabId);
-      if (content) content.style.display = (t === tabId) ? 'block' : 'none';
+    const tabMap = {
+      'recording': 'audio',
+      'audio': 'audio',
+      'notes': 'notes',
+      'settings': 'settings'
+    };
+    const active = tabMap[tabId] || 'audio';
+    ['audio', 'notes', 'settings'].forEach(t => {
+      const btn = getEl(`jitsiTabBtn_${t}`) || document.querySelector(`[data-tab="${t}"]`) || (t === 'audio' ? document.querySelector(`[data-tab="recording"]`) : null);
+      const content = getEl(`jitsiTabContent_${t}`) || (t === 'audio' ? getEl('jitsiRecordingTab') : (t === 'notes' ? getEl('jitsiNotesTab') : getEl('jitsiSettingsTab')));
+      if (btn) btn.classList.toggle('active', t === active);
+      if (content) content.style.display = (t === active) ? 'block' : 'none';
     });
   }
 
