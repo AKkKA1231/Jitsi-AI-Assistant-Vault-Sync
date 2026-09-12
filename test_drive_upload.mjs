@@ -154,6 +154,69 @@ await itAsync('Should construct correct payload and process successful Webhook r
   }
 });
 
+await itAsync('Should accept alternative Apps Script success payloads (status: success, result: ok)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: 'success',
+      folderId: 'alt_folder_888',
+      folderUrl: 'https://drive.google.com/drive/folders/alt_folder_888'
+    })
+  });
+
+  try {
+    const result = await uploader.uploadViaWebhook({
+      webhookUrl: 'https://script.google.com/macros/s/alt/exec',
+      folderName: 'Alt_Sync',
+      audioBlob: null,
+      audioFileName: 'audio.webm',
+      markdownText: 'notes',
+      markdownFileName: 'notes.md',
+      onProgress: () => {}
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.folderId, 'alt_folder_888');
+    assert.strictEqual(result.folderUrl, 'https://drive.google.com/drive/folders/alt_folder_888');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+await itAsync('Should surface specific error messages from Apps Script instead of generic fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: 'error',
+      message: 'Drive storage quota full for user account'
+    })
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await uploader.uploadViaWebhook({
+          webhookUrl: 'https://script.google.com/macros/s/quota/exec',
+          folderName: 'QuotaTest',
+          audioBlob: null,
+          audioFileName: 'audio.webm',
+          markdownText: 'notes',
+          markdownFileName: 'notes.md',
+          onProgress: () => {}
+        });
+      },
+      /Drive storage quota full for user account/,
+      'Must surface specific error message from Apps Script'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 await itAsync('Should gracefully catch and format Webhook HTTP errors', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({

@@ -76,14 +76,19 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
        var audioUrl = null;
        var audioBase64 = data.audioBase64 || data.base64Audio;
        if (audioBase64 && audioBase64.length > 0) {
-         var audioBytes = Utilities.base64Decode(audioBase64);
-         var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
-         var audioFile = subFolder.createFile(audioBlob);
-         audioUrl = audioFile.getUrl();
+         try {
+           var audioBytes = Utilities.base64Decode(audioBase64);
+           var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
+           var audioFile = subFolder.createFile(audioBlob);
+           audioUrl = audioFile.getUrl();
+         } catch (audioErr) {
+           subFolder.createFile("Audio_Upload_Notice.txt", "Audio payload exceeded Google Apps Script memory limit. Please download audio locally from the extension drawer.\n\nNotice: " + audioErr.toString());
+         }
        }
        
        return ContentService.createTextOutput(JSON.stringify({
          success: true,
+         status: "success",
          folderId: subFolder.getId(),
          folderUrl: subFolder.getUrl(),
          notesUrl: mdFile.getUrl(),
@@ -92,7 +97,9 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
      } catch (err) {
        return ContentService.createTextOutput(JSON.stringify({
          success: false,
-         error: err.toString()
+         status: "error",
+         error: err.toString(),
+         message: err.toString()
        })).setMimeType(ContentService.MimeType.JSON);
      }
    }

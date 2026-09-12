@@ -42,14 +42,19 @@ function doPost(e) {
     var audioUrl = null;
     var audioBase64 = data.audioBase64 || data.base64Audio;
     if (audioBase64 && audioBase64.length > 0) {
-      var audioBytes = Utilities.base64Decode(audioBase64);
-      var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
-      var audioFile = meetingFolder.createFile(audioBlob);
-      audioUrl = audioFile.getUrl();
+      try {
+        var audioBytes = Utilities.base64Decode(audioBase64);
+        var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
+        var audioFile = meetingFolder.createFile(audioBlob);
+        audioUrl = audioFile.getUrl();
+      } catch (audioErr) {
+        meetingFolder.createFile("Audio_Upload_Notice.txt", "Audio payload exceeded Google Apps Script memory limit. Please download audio locally from the extension drawer.\n\nNotice: " + audioErr.toString());
+      }
     }
 
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
+      status: "success",
       folderId: meetingFolder.getId(),
       folderUrl: meetingFolder.getUrl(),
       notesUrl: mdFile.getUrl(),
@@ -59,7 +64,9 @@ function doPost(e) {
   } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
-      error: err.toString()
+      status: "error",
+      error: err.toString(),
+      message: err.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
 }

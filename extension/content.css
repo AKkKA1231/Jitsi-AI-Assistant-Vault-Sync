@@ -7,32 +7,29 @@
   bottom: 120px;
   right: 20px;
   z-index: 999990;
-  background: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  color: #f8fafc;
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 50px;
-  padding: 7px 14px;
+  padding: 8px 14px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 16px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   user-select: none;
   touch-action: none;
-  transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.2s ease, width 0.2s ease, border-color 0.2s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.2s ease, width 0.2s ease;
 }
 
 #jitsi-ai-toggle-btn:hover,
 #jitsiAiFloatingToggle:hover,
 .jitsi-ai-floating-toggle:hover {
   transform: translateY(-2px);
-  border-color: rgba(99, 102, 241, 0.7);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 22px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 10px 26px rgba(99, 102, 241, 0.6);
 }
 
 /* Hide floating button when sidebar is open or when minimized/hidden */

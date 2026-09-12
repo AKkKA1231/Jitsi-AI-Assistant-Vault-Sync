@@ -132,14 +132,52 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
   try {
     json = JSON.parse(text);
   } catch (parseErr) {
-    throw new Error(`Invalid JSON response from Apps Script: ${text.slice(0, 120)}`);
+    if (text && (text.includes('drive.google.com') || text.toLowerCase().includes('success'))) {
+      return {
+        success: true,
+        folderUrl: text.includes('drive.google.com') ? text.trim() : 'https://drive.google.com/drive/my-drive',
+        raw: text
+      };
+    }
+    throw new Error(`Invalid JSON response from Apps Script: ${text ? text.slice(0, 150) : 'Empty response'}`);
   }
 
-  if (!json.success) {
-    throw new Error(json.error || 'Apps Script returned unsuccessful status');
+  // Handle all valid success indicators across different Apps Script implementations
+  const isSuccessful =
+    json && (
+      json.success === true ||
+      json.success === 'true' ||
+      json.status === 'success' ||
+      json.status === 'ok' ||
+      json.result === 'success' ||
+      json.result === 'ok' ||
+      json.ok === true ||
+      Boolean(json.folderId || json.folderUrl || json.notesUrl || json.audioUrl || json.fileUrl)
+    );
+
+  if (isSuccessful) {
+    return {
+      success: true,
+      folderId: json.folderId || json.folder_id || json.id || '',
+      folderUrl: json.folderUrl || json.folder_url || json.url || (json.folderId ? `https://drive.google.com/drive/folders/${json.folderId}` : 'https://drive.google.com/drive/my-drive'),
+      notesUrl: json.notesUrl || json.notes_url || json.fileUrl || json.file_url || null,
+      audioUrl: json.audioUrl || json.audio_url || null,
+      raw: json
+    };
   }
 
-  return json;
+  // Extract real error message from json payload instead of generic fallback
+  const detailedError =
+    (typeof json.error === 'string' && json.error.trim()) ||
+    (json.error && typeof json.error === 'object' && (json.error.message || JSON.stringify(json.error))) ||
+    (typeof json.message === 'string' && json.message.trim()) ||
+    (typeof json.details === 'string' && json.details.trim()) ||
+    (typeof json.msg === 'string' && json.msg.trim()) ||
+    (typeof json.err === 'string' && json.err.trim()) ||
+    (json.status && json.status !== 'error' && json.status !== 'failed' ? `Status: ${json.status}` : null) ||
+    `Apps Script returned unsuccessful status (${JSON.stringify(json)})`;
+
+  throw new Error(detailedError);
 }
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key

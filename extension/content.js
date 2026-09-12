@@ -311,11 +311,11 @@
       AudioMixer.cleanupMixer();
       stopLiveSTT();
 
-      // Reset floating badge to Standby
+      // Reset floating badge to Ready
       const floatBadge = getEl('jitsiFloatingCount');
       if (floatBadge) {
         floatBadge.className = 'jitsi-ai-badge';
-        floatBadge.textContent = 'Standby';
+        floatBadge.textContent = 'Ready';
       }
 
       // Switch button immediately to "Record Again" so user never loses the ability to record!
@@ -620,11 +620,11 @@
     const togglePill = document.createElement('button');
     togglePill.id = 'jitsi-ai-toggle-btn';
     togglePill.className = 'jitsi-ai-floating-toggle';
-    togglePill.title = "Click to open Meeting Notes AI. Drag up/down to reposition.";
+    togglePill.title = "Click to open AI Assistant. Drag up/down to reposition.";
     togglePill.innerHTML = `
-      <span class="jitsi-ai-logo-icon">🎙️</span>
-      <span id="jitsiToggleText" style="white-space:nowrap; font-weight:600;">Meeting Notes AI</span>
-      <span id="jitsiFloatingCount" class="jitsi-ai-badge">Standby</span>
+      <span class="jitsi-ai-logo-icon">✨</span>
+      <span id="jitsiToggleText" style="white-space:nowrap;">AI Assistant</span>
+      <span id="jitsiFloatingCount" class="jitsi-ai-badge">Ready</span>
       <span id="jitsiToggleMiniBtn" title="Minimize / Expand" style="opacity:0.75; font-size:12px; margin-left:4px; padding:0 3px; cursor:pointer; font-weight:700;">–</span>
       <span id="jitsiToggleHideBtn" title="Hide Bar" style="opacity:0.75; font-size:13px; margin-left:2px; padding:0 3px; cursor:pointer; font-weight:700;">&times;</span>
     `;
