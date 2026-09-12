@@ -1,6 +1,8 @@
 /* Jitsi Meet AI Assistant Injected Extension Styling */
 
-#jitsi-ai-toggle-btn {
+#jitsi-ai-toggle-btn,
+#jitsiAiFloatingToggle,
+.jitsi-ai-floating-toggle {
   position: fixed;
   bottom: 120px;
   right: 20px;
@@ -23,33 +25,72 @@
   transition: opacity 0.25s ease, transform 0.25s ease, box-shadow 0.2s ease, width 0.2s ease;
 }
 
-#jitsi-ai-toggle-btn:hover {
+#jitsi-ai-toggle-btn:hover,
+#jitsiAiFloatingToggle:hover,
+.jitsi-ai-floating-toggle:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 26px rgba(99, 102, 241, 0.6);
 }
 
-/* Hide floating button when sidebar is open or when minimized */
+/* Hide floating button when sidebar is open or when minimized/hidden */
 #jitsi-ai-sidebar.open ~ #jitsi-ai-toggle-btn,
+#jitsiAiSidebar.open ~ #jitsi-ai-toggle-btn,
+#jitsi-ai-sidebar.open ~ #jitsiAiFloatingToggle,
+#jitsiAiSidebar.open ~ #jitsiAiFloatingToggle,
 #jitsi-ai-toggle-btn.sidebar-open,
-#jitsi-ai-toggle-btn.hidden {
+#jitsiAiFloatingToggle.sidebar-open,
+.jitsi-ai-floating-toggle.sidebar-open,
+#jitsi-ai-toggle-btn.hidden,
+#jitsiAiFloatingToggle.hidden,
+.jitsi-ai-floating-toggle.hidden {
   opacity: 0 !important;
   pointer-events: none !important;
   transform: translateX(120%) scale(0.8) !important;
 }
 
 /* Compact mini-badge mode (when user collapses or on small viewports) */
-#jitsi-ai-toggle-btn.compact {
+#jitsi-ai-toggle-btn.compact,
+#jitsiAiFloatingToggle.compact,
+.jitsi-ai-floating-toggle.compact {
   padding: 9px;
   border-radius: 50%;
   width: 38px;
   height: 38px;
   justify-content: center;
 }
-#jitsi-ai-toggle-btn.compact span {
-  display: none;
+#jitsi-ai-toggle-btn.compact span:not(.jitsi-ai-logo-icon),
+#jitsiAiFloatingToggle.compact span:not(.jitsi-ai-logo-icon),
+.jitsi-ai-floating-toggle.compact span:not(.jitsi-ai-logo-icon) {
+  display: none !important;
 }
 
-#jitsi-ai-sidebar {
+/* Subtle edge restore handle when user hides the floating button */
+#jitsiEdgeRestoreBtn {
+  position: fixed;
+  right: 0;
+  bottom: 120px;
+  z-index: 999980;
+  width: 8px;
+  height: 48px;
+  background: rgba(99, 102, 241, 0.75);
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+  cursor: pointer;
+  transition: width 0.2s ease, background 0.2s ease;
+  display: none;
+}
+#jitsiEdgeRestoreBtn:hover {
+  width: 22px;
+  background: #6366f1;
+}
+#jitsi-ai-toggle-btn.hidden ~ #jitsiEdgeRestoreBtn,
+#jitsiAiFloatingToggle.hidden ~ #jitsiEdgeRestoreBtn {
+  display: block;
+}
+
+#jitsi-ai-sidebar,
+#jitsiAiSidebar,
+.jitsi-ai-sidebar {
   position: fixed;
   top: 0;
   right: -420px;
@@ -67,8 +108,10 @@
   flex-direction: column;
 }
 
-#jitsi-ai-sidebar.open {
-  right: 0;
+#jitsi-ai-sidebar.open,
+#jitsiAiSidebar.open,
+.jitsi-ai-sidebar.open {
+  right: 0 !important;
 }
 
 .jitsi-ai-ext-header {

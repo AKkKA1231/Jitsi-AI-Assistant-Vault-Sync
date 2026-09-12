@@ -459,6 +459,25 @@ it('Should simulate 35-minute multi-chunk assembly without memory corruption', (
   assert.ok(checkpointsCount >= 11, `Expected at least 11 auto-checkpoints for 35 mins, got ${checkpointsCount}`);
 });
 
+it('Should verify Meeting Mic Mute synchronization and zeroing in audioMixer.js', () => {
+  const mixerSrc = fs.readFileSync(path.resolve('./extension/modules/audioMixer.js'), 'utf-8');
+  const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
+
+  // Verify mute detection for Google Meet and Jitsi
+  assert.ok(mixerSrc.includes('isMeetingMicMuted'), 'audioMixer.js must define isMeetingMicMuted');
+  assert.ok(mixerSrc.includes('data-is-muted'), 'audioMixer.js must check Google Meet data-is-muted attribute');
+  assert.ok(mixerSrc.includes('turn on microphone'), 'audioMixer.js must detect Google Meet mute aria-label');
+  assert.ok(mixerSrc.includes('#audio-mute'), 'audioMixer.js must check Jitsi mute button');
+
+  // Verify gain zeroing and WebRTC track disabling when muted
+  assert.ok(mixerSrc.includes('setValueAtTime(0') || mixerSrc.includes('setTargetAtTime(0'), 'audioMixer.js must zero gain when mic is off');
+  assert.ok(mixerSrc.includes('track.enabled = false'), 'audioMixer.js must disable audio tracks when mic is off');
+
+  // Verify manual mic override and UI indicator
+  assert.ok(mixerSrc.includes('setManualMicMute'), 'audioMixer.js must export setManualMicMute');
+  assert.ok(contentJs.includes('jitsiMicMuteToggleBtn'), 'content.js must provide mic mute toggle control');
+});
+
 // ----------------------------------------------------
 // Results Summary
 // ----------------------------------------------------

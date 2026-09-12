@@ -16,6 +16,9 @@
   let analyser = null;
   let mixerDest = null;
   let micStream = null;
+  let micGainNode = null;
+  let isLocalMicMuted = false;
+  let manualMicMuteOverride = false;
   let connectedAudioElements = new Set();
   let remoteObserver = null;
 
@@ -25,6 +28,93 @@
   let vadState = 'silence';
   let activeSpeechDurationSec = 0;
   let silenceDurationSec = 0;
+
+  /**
+   * Detects whether the user's mic is turned off / muted in Google Meet or Jitsi Meet
+   */
+  function isMeetingMicMuted() {
+    if (manualMicMuteOverride) return true;
+
+    // 1. Google Meet detection
+    try {
+      const gmeetBtn = document.querySelector(
+        'button[data-is-muted], div[data-is-muted], button[aria-label*="microphone" i], button[aria-label*="mic" i]'
+      );
+      if (gmeetBtn) {
+        const isMutedAttr = gmeetBtn.getAttribute('data-is-muted');
+        if (isMutedAttr === 'true') return true;
+        if (isMutedAttr === 'false') return false;
+
+        const label = (gmeetBtn.getAttribute('aria-label') || '').toLowerCase();
+        // In Google Meet: "Turn on microphone" means it is currently OFF
+        if (label.includes('turn on microphone') || label.includes('unmute') || label.includes('mic is off')) {
+          return true;
+        }
+        if (label.includes('turn off microphone') || label.includes('mic is on')) {
+          return false;
+        }
+      }
+
+      const gmeetMutedIcon = document.querySelector('i[data-is-muted="true"], [data-is-muted="true"]');
+      if (gmeetMutedIcon) return true;
+    } catch (e) {}
+
+    // 2. Jitsi Meet detection
+    try {
+      if (typeof window !== 'undefined' && window.APP && window.APP.conference && typeof window.APP.conference.isLocalAudioMuted === 'function') {
+        return window.APP.conference.isLocalAudioMuted();
+      }
+    } catch (e) {}
+
+    try {
+      const jitsiBtn = document.querySelector('#audio-mute, [data-testid="audio-mute"], [aria-label*="mute audio" i], [aria-label*="unmute audio" i]');
+      if (jitsiBtn) {
+        const label = (jitsiBtn.getAttribute('aria-label') || '').toLowerCase();
+        const classList = jitsiBtn.className || '';
+        if (label.includes('unmute') || classList.includes('toggled') || classList.includes('selected') || classList.includes('muted')) {
+          return true;
+        }
+      }
+    } catch (e) {}
+
+    return false;
+  }
+
+  /**
+   * Synchronizes local microphone capture with meeting mute status.
+   * If mic is off, gain is set to 0 and tracks are silenced immediately.
+   */
+  function syncLocalMicState() {
+    if (!micGainNode || !audioCtx) return;
+
+    const shouldMute = isMeetingMicMuted();
+    if (shouldMute !== isLocalMicMuted) {
+      isLocalMicMuted = shouldMute;
+      if (isLocalMicMuted) {
+        // Zero gain immediately so no audio data reaches mixerDest or analyser
+        try { micGainNode.gain.setValueAtTime(0, audioCtx.currentTime); } catch (e) {}
+        if (micStream) {
+          micStream.getAudioTracks().forEach(track => { track.enabled = false; });
+        }
+        console.log('[Audio Mixer] Meeting mic is OFF -> silenced local audio capture.');
+      } else {
+        if (micStream) {
+          micStream.getAudioTracks().forEach(track => { track.enabled = true; });
+        }
+        try { micGainNode.gain.setValueAtTime(1, audioCtx.currentTime); } catch (e) {}
+        console.log('[Audio Mixer] Meeting mic is ON -> resumed local audio capture.');
+      }
+    }
+
+    // Update UI speaker badge
+    const badge = document.getElementById('jitsiSpeakerCountBadge');
+    if (badge) {
+      const remoteCount = connectedAudioElements.size;
+      badge.textContent = isLocalMicMuted
+        ? `🔇 You Muted (${remoteCount} Remote)`
+        : `🎙️ You + ${remoteCount} Remote`;
+    }
+  }
 
   async function initAudioMixer(sidebarElement) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -47,14 +137,20 @@
 
     connectedAudioElements.clear();
 
-    // 1. Capture Local Microphone
+    // 1. Capture Local Microphone with dynamic mute gating
     try {
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true }
       });
       const micSource = audioCtx.createMediaStreamSource(micStream);
-      micSource.connect(analyser);
-      console.log('[Audio Mixer] Local microphone connected.');
+      micGainNode = audioCtx.createGain();
+      micGainNode.gain.setValueAtTime(1, audioCtx.currentTime);
+      micSource.connect(micGainNode);
+      micGainNode.connect(analyser);
+      console.log('[Audio Mixer] Local microphone connected with automatic mute synchronization.');
+
+      // Check initial state
+      syncLocalMicState();
     } catch (err) {
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
@@ -71,6 +167,16 @@
         }
       });
       remoteObserver.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // 4. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('click', () => setTimeout(syncLocalMicState, 60));
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'd' || e.key === 'D' || e.key === 'm' || e.key === 'M') {
+          setTimeout(syncLocalMicState, 120);
+        }
+      });
     }
 
     return mixerDest.stream;
@@ -103,7 +209,9 @@
 
     const badge = document.getElementById('jitsiSpeakerCountBadge');
     if (badge) {
-      badge.textContent = `You + ${remoteCount} Remote`;
+      badge.textContent = isLocalMicMuted
+        ? `🔇 You Muted (${remoteCount} Remote)`
+        : `🎙️ You + ${remoteCount} Remote`;
     }
   }
 
@@ -119,6 +227,9 @@
     vadMonitorInterval = setInterval(() => {
       const recording = typeof isRecordingFn === 'function' ? isRecordingFn() : false;
       if (!recording || !analyser) return;
+
+      // Real-time synchronization with meeting microphone mute status
+      syncLocalMicState();
 
       analyser.getByteTimeDomainData(vadDataArray);
 
@@ -137,12 +248,15 @@
       const dot = document.getElementById('jitsiVadDot');
       const label = document.getElementById('jitsiVadLabel');
 
-      if (rms > SILENCE_THRESHOLD) {
+      if (isLocalMicMuted && connectedAudioElements.size === 0) {
+        if (dot) dot.className = 'jitsi-ai-vad-dot silence';
+        if (label) label.textContent = '🔇 Mic Off (Not Capturing)';
+      } else if (rms > SILENCE_THRESHOLD) {
         consecutiveSilenceFrames = 0;
         if (vadState !== 'speaking') {
           vadState = 'speaking';
           if (dot) dot.className = 'jitsi-ai-vad-dot speaking';
-          if (label) label.textContent = '🟢 Speaking (Capturing)';
+          if (label) label.textContent = isLocalMicMuted ? '🟢 Remote Speaking' : '🟢 Speaking (Capturing)';
         }
         activeSpeechDurationSec += 0.1;
       } else {
@@ -151,7 +265,7 @@
           if (vadState !== 'silence') {
             vadState = 'silence';
             if (dot) dot.className = 'jitsi-ai-vad-dot silence';
-            if (label) label.textContent = '⚪ Silence (Skipped)';
+            if (label) label.textContent = isLocalMicMuted ? '🔇 Mic Off (Not Capturing)' : '⚪ Silence (Skipped)';
           }
           silenceDurationSec += 0.1;
         }
@@ -214,6 +328,12 @@
     stopVAD,
     resetVADStats,
     cleanupMixer,
+    isMicMuted: () => isLocalMicMuted,
+    setManualMicMute: (muted) => {
+      manualMicMuteOverride = !!muted;
+      syncLocalMicState();
+    },
+    syncLocalMicState,
     getStats: () => ({
       activeSpeechDurationSec,
       silenceDurationSec,

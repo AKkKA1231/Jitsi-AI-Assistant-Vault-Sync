@@ -65,6 +65,17 @@
   let geminiApiKey = window.localStorage.getItem(STORAGE_AI_KEY) || DEFAULT_GEMINI_KEY;
   let editingAccIdx = activeAccIdx;
 
+  function getEl(id) {
+    if (!id) return null;
+    if (id === 'jitsiAiFloatingToggle' || id === 'jitsi-ai-toggle-btn') {
+      return document.getElementById('jitsi-ai-toggle-btn') || document.getElementById('jitsiAiFloatingToggle');
+    }
+    if (id === 'jitsiAiSidebar' || id === 'jitsi-ai-sidebar') {
+      return document.getElementById('jitsi-ai-sidebar') || document.getElementById('jitsiAiSidebar');
+    }
+    return document.getElementById(id);
+  }
+
   function updateAiKeyDisplay() {
     const badge = document.getElementById('jitsiAiKeyBadge');
     if (badge) {
@@ -477,25 +488,71 @@
   // UI Injection & Event Binding
   // --------------------------------------------------------------------------
   function injectUI() {
-    if (document.getElementById('jitsiAiSidebar')) return;
+    if (document.getElementById('jitsiAiSidebar') || document.getElementById('jitsi-ai-sidebar')) return;
 
     // 1. Floating Toggle Button (zero-obstruction, elevated z-index, pointer dragging)
     const togglePill = document.createElement('button');
-    togglePill.id = 'jitsiAiFloatingToggle';
+    togglePill.id = 'jitsi-ai-toggle-btn';
     togglePill.className = 'jitsi-ai-floating-toggle';
+    togglePill.title = "Click to open AI Assistant. Drag up/down to reposition.";
     togglePill.innerHTML = `
       <span class="jitsi-ai-logo-icon">✨</span>
-      <span>AI Assistant</span>
+      <span id="jitsiToggleText" style="white-space:nowrap;">AI Assistant</span>
       <span id="jitsiFloatingCount" class="jitsi-ai-badge">Ready</span>
+      <span id="jitsiToggleMiniBtn" title="Minimize / Expand" style="opacity:0.75; font-size:12px; margin-left:4px; padding:0 3px; cursor:pointer; font-weight:700;">–</span>
+      <span id="jitsiToggleHideBtn" title="Hide Bar" style="opacity:0.75; font-size:13px; margin-left:2px; padding:0 3px; cursor:pointer; font-weight:700;">&times;</span>
     `;
     document.body.appendChild(togglePill);
+
+    // Subtle edge restore tab when user hides the floating button
+    const edgeRestore = document.createElement('div');
+    edgeRestore.id = 'jitsiEdgeRestoreBtn';
+    edgeRestore.title = 'Click to show AI Assistant floating bar';
+    edgeRestore.onclick = () => {
+      togglePill.classList.remove('hidden');
+      window.localStorage.setItem('jitsi_toggle_hidden', '0');
+      showToast('AI Assistant bar restored');
+    };
+    document.body.appendChild(edgeRestore);
+
+    // Restore saved compact / position / hidden state
+    const savedBottom = window.localStorage.getItem('jitsi_toggle_bottom');
+    if (savedBottom) togglePill.style.bottom = `${savedBottom}px`;
+    if (window.localStorage.getItem('jitsi_toggle_compact') === '1') {
+      togglePill.classList.add('compact');
+    }
+    if (window.localStorage.getItem('jitsi_toggle_hidden') === '1') {
+      togglePill.classList.add('hidden');
+    }
 
     // Draggable toggle button pointer support
     let isDragging = false;
     let dragStartY = 0;
     let initialBottom = 120;
+    let hasMoved = false;
+
+    const miniBtn = togglePill.querySelector('#jitsiToggleMiniBtn');
+    if (miniBtn) {
+      miniBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isCompact = togglePill.classList.toggle('compact');
+        window.localStorage.setItem('jitsi_toggle_compact', isCompact ? '1' : '0');
+      });
+    }
+
+    const hideBtn = togglePill.querySelector('#jitsiToggleHideBtn');
+    if (hideBtn) {
+      hideBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePill.classList.add('hidden');
+        window.localStorage.setItem('jitsi_toggle_hidden', '1');
+        showToast('Floating bar hidden. Click the edge tab on the right to restore.');
+      });
+    }
+
     togglePill.addEventListener('pointerdown', (e) => {
       isDragging = true;
+      hasMoved = false;
       dragStartY = e.clientY;
       initialBottom = parseInt(window.getComputedStyle(togglePill).bottom, 10) || 120;
       try { togglePill.setPointerCapture(e.pointerId); } catch (err) {}
@@ -504,12 +561,19 @@
     togglePill.addEventListener('pointermove', (e) => {
       if (!isDragging) return;
       const deltaY = dragStartY - e.clientY;
-      const newBottom = Math.max(20, Math.min(window.innerHeight - 80, initialBottom + deltaY));
-      togglePill.style.bottom = `${newBottom}px`;
+      if (Math.abs(deltaY) > 5) {
+        hasMoved = true;
+        const newBottom = Math.max(20, Math.min(window.innerHeight - 80, initialBottom + deltaY));
+        togglePill.style.bottom = `${newBottom}px`;
+      }
     });
 
     const endDrag = (e) => {
       if (isDragging) {
+        if (hasMoved) {
+          const curBottom = parseInt(togglePill.style.bottom, 10);
+          window.localStorage.setItem('jitsi_toggle_bottom', String(curBottom));
+        }
         isDragging = false;
         try { togglePill.releasePointerCapture(e.pointerId); } catch (err) {}
       }
@@ -519,7 +583,7 @@
 
     // 2. Main Slide-Out Drawer Sidebar
     const sidebar = document.createElement('aside');
-    sidebar.id = 'jitsiAiSidebar';
+    sidebar.id = 'jitsi-ai-sidebar';
     sidebar.className = 'jitsi-ai-sidebar';
     sidebar.innerHTML = `
       <div class="jitsi-ai-header">
@@ -544,7 +608,10 @@
         <div class="jitsi-ai-card">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <div style="font-weight:700; font-size:13px; color:#fff;">Audio &amp; Voice Activity</div>
-            <span id="jitsiSpeakerCountBadge" class="jitsi-ai-badge">You</span>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button id="jitsiMicMuteToggleBtn" class="jitsi-ai-ext-btn-secondary" style="padding:2px 7px; font-size:10px; height:22px; cursor:pointer;" title="Click to manually mute/unmute local mic in recording">🎤 Sync: Auto</button>
+              <span id="jitsiSpeakerCountBadge" class="jitsi-ai-badge">You</span>
+            </div>
           </div>
 
           <div class="jitsi-ai-volume-meter">
@@ -673,8 +740,40 @@
     document.body.appendChild(sidebar);
 
     // Event Bindings
-    getEl('jitsiAiFloatingToggle').onclick = () => sidebar.classList.toggle('open');
-    getEl('jitsiCloseSidebarBtn').onclick = () => sidebar.classList.remove('open');
+    togglePill.onclick = (e) => {
+      if (hasMoved || e.target.closest('#jitsiToggleMiniBtn') || e.target.closest('#jitsiToggleHideBtn')) return;
+      sidebar.classList.add('open');
+      togglePill.classList.add('sidebar-open');
+    };
+
+    const closeSidebarBtn = getEl('jitsiCloseSidebarBtn');
+    if (closeSidebarBtn) {
+      closeSidebarBtn.onclick = () => {
+        sidebar.classList.remove('open');
+        togglePill.classList.remove('sidebar-open');
+      };
+    }
+
+    // Auto-close sidebar on click outside
+    document.addEventListener('click', (e) => {
+      if (sidebar.classList.contains('open') && !sidebar.contains(e.target) && !togglePill.contains(e.target)) {
+        sidebar.classList.remove('open');
+        togglePill.classList.remove('sidebar-open');
+      }
+    });
+
+    // Manual mic mute toggle button
+    const micToggleBtn = getEl('jitsiMicMuteToggleBtn');
+    if (micToggleBtn) {
+      let isForceMuted = false;
+      micToggleBtn.onclick = () => {
+        isForceMuted = !isForceMuted;
+        AudioMixer.setManualMicMute(isForceMuted);
+        micToggleBtn.textContent = isForceMuted ? '🔇 Mic: Force Muted' : '🎤 Sync: Auto';
+        micToggleBtn.style.color = isForceMuted ? '#f87171' : '#a5b4fc';
+        showToast(isForceMuted ? 'Local mic forced off for recording' : 'Local mic synced with meeting mute');
+      };
+    }
 
     getEl('jitsiTabBtn_audio').onclick = () => UI.switchTab('audio');
     getEl('jitsiTabBtn_notes').onclick = () => UI.switchTab('notes');
