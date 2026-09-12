@@ -181,7 +181,15 @@ Respond in JSON format: {"decisions": [{"speaker": "...", "text": "...", "timest
 Transcript:
 ${textContext}`;
 
-    const models = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    const models = [
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-8b',
+      'gemini-2.0-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-flash-latest',
+      'gemini-3.1-flash-lite'
+    ];
     for (const model of models) {
       try {
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`, {
@@ -241,7 +249,15 @@ Include sections:
 Transcript:
 ${fullText}`;
 
-    const models = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+    const models = [
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-8b',
+      'gemini-2.0-flash-lite',
+      'gemini-3.6-flash',
+      'gemini-flash-latest',
+      'gemini-3.1-flash-lite'
+    ];
     for (const model of models) {
       try {
         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.apiKey}`, {

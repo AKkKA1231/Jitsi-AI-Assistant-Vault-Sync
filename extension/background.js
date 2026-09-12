@@ -143,7 +143,27 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
 }
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
-const GEMINI_MODELS = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+const GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-lite',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite'
+];
+
+async function fetchWithBackoff(url, options, maxRetries = 1) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, options);
+    if ((response.status === 503 || response.status === 429) && attempt < maxRetries) {
+      console.warn(`[Gemini Background] HTTP ${response.status} (Demand Spike) encountered. Retrying in 1000ms...`);
+      await new Promise(r => setTimeout(r, 1000));
+      continue;
+    }
+    return response;
+  }
+}
 
 async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName }) {
   const activeKey = apiKey || DEFAULT_GEMINI_KEY;
@@ -193,7 +213,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       console.log(`[Gemini Background] Requesting transcription via ${model}...`);
       
-      const response = await fetch(url, {
+      const response = await fetchWithBackoff(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -285,7 +305,7 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
   for (const model of GEMINI_MODELS) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
-      const response = await fetch(url, {
+      const response = await fetchWithBackoff(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -340,7 +360,7 @@ A crisp 3-sentence summary of the discussion.`;
   for (const model of GEMINI_MODELS) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
-      const response = await fetch(url, {
+      const response = await fetchWithBackoff(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)

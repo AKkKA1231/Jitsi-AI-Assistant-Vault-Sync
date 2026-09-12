@@ -18,7 +18,15 @@
   const STORAGE_KEY = 'jitsi_plugin_accounts_v3';
   const STORAGE_ACTIVE_KEY = 'jitsi_plugin_active_idx_v3';
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
-  const GEMINI_CASCADE = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  const GEMINI_CASCADE = [
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b',
+    'gemini-2.0-flash-lite',
+    'gemini-3.6-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite'
+  ];
 
   const DEFAULT_ACCOUNTS = [
     {
