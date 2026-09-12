@@ -1,8 +1,10 @@
 /**
  * Meeting Assistant Extension - Background Service Worker
  * Handles network requests to Gemini Multimodal Audio API to bypass page-level CSP
+ * Supports streaming chunk port protocol to bypass Chrome's 64MiB sendMessage IPC limit
  */
 
+// 1. One-shot message listener for standard operations
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'GEMINI_TRANSCRIBE') {
     handleGeminiTranscription(request)
@@ -11,11 +13,68 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Keep message channel open for async response
   }
 
+  if (request.action === 'GEMINI_TRANSCRIBE_CHUNK') {
+    handleGeminiChunkTranscription(request)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
+    return true;
+  }
+
+  if (request.action === 'GEMINI_SYNTHESIZE_SUMMARY') {
+    handleGeminiSynthesizeSummary(request)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
+    return true;
+  }
+
   if (request.action === 'DRIVE_UPLOAD_WEBHOOK') {
     handleDriveWebhookUpload(request)
       .then(result => sendResponse({ success: true, data: result }))
       .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
     return true; // Keep message channel open for async response
+  }
+});
+
+// 2. Persistent streaming port listener to bypass Chrome's 64MiB IPC limit
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'DRIVE_STREAM_UPLOAD') {
+    console.log('[Background Service Worker] Connected to streaming upload port.');
+    let uploadMeta = null;
+    let audioChunks = [];
+    let receivedBytes = 0;
+
+    port.onMessage.addListener(async (msg) => {
+      try {
+        if (msg.type === 'START') {
+          uploadMeta = msg.metadata;
+          audioChunks = [];
+          receivedBytes = 0;
+          console.log(`[Background Upload Stream] Starting stream for ${uploadMeta.roomName || 'Meeting'}, expected total chunks: ${msg.totalSlices}`);
+          port.postMessage({ type: 'ACK', index: -1 });
+        } else if (msg.type === 'CHUNK') {
+          audioChunks.push(msg.data);
+          receivedBytes += (msg.data || '').length;
+          port.postMessage({ type: 'ACK', index: msg.chunkIndex });
+        } else if (msg.type === 'COMPLETE') {
+          console.log(`[Background Upload Stream] All chunks received (${audioChunks.length} slices, ~${(receivedBytes / 1024 / 1024).toFixed(1)} MB). Reassembling...`);
+          const fullAudioBase64 = audioChunks.join('');
+          const payload = {
+            ...uploadMeta.payload,
+            audioBase64: fullAudioBase64
+          };
+
+          const uploadResult = await handleDriveWebhookUpload({
+            webhookUrl: uploadMeta.webhookUrl,
+            payload
+          });
+
+          port.postMessage({ type: 'SUCCESS', data: uploadResult });
+        }
+      } catch (err) {
+        console.error('[Background Upload Stream] Error in stream processing:', err);
+        port.postMessage({ type: 'ERROR', error: err.message || err.toString() });
+      }
+    });
   }
 });
 
@@ -187,4 +246,141 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
   }
 
   throw lastError || new Error('All Gemini transcription models failed.');
+}
+
+/**
+ * Transcribes an individual 3-5 minute audio chunk
+ */
+async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName }) {
+  const activeKey = apiKey || DEFAULT_GEMINI_KEY;
+  if (!activeKey) {
+    throw new Error('No Gemini API key provided.');
+  }
+  if (!base64Audio) {
+    return { chunkIndex, transcript: '' };
+  }
+
+  const promptText = `You are a high-accuracy meeting transcriber.
+This is Audio Segment #${chunkIndex + 1} of ${totalChunks} (Time window: ${startTime || '00:00'} - ${endTime || '00:00'}) for meeting room "${roomName || 'Meeting'}".
+Transcribe this entire audio segment verbatim with speaker identification and timestamps.
+Return ONLY the timestamped transcript text. Do not add conversational intro/outro.`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: promptText },
+          {
+            inlineData: {
+              mimeType: mimeType || 'audio/webm',
+              data: base64Audio
+            }
+          }
+        ]
+      }
+    ]
+  };
+
+  let lastError = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Model ${model} returned (${response.status}): ${errText}`);
+      }
+
+      const data = await response.json();
+      const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      return { chunkIndex, transcript: transcript.trim(), modelUsed: model };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error(`Failed to transcribe chunk #${chunkIndex + 1}`);
+}
+
+/**
+ * Synthesizes combined chunk transcripts into Executive Minutes
+ */
+async function handleGeminiSynthesizeSummary({ apiKey, fullTranscriptText, roomName }) {
+  const activeKey = apiKey || DEFAULT_GEMINI_KEY;
+  if (!activeKey) {
+    throw new Error('No Gemini API key provided.');
+  }
+
+  const promptText = `You are an executive meeting secretary.
+Below is the complete verbatim transcript from meeting "${roomName || 'Meeting'}".
+
+Full Transcript:
+${fullTranscriptText}
+
+Based on this transcript, generate:
+## 🎯 Key Decisions
+- List every confirmed decision or consensus point.
+
+## ✅ Action Items & Owners
+- [ ] List each actionable task with owner and deadline if mentioned.
+
+## 📌 Executive Summary
+A crisp 3-sentence summary of the discussion.`;
+
+  const payload = {
+    contents: [{ parts: [{ text: promptText }] }]
+  };
+
+  let lastError = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Model ${model} returned (${response.status}): ${errText}`);
+      }
+
+      const data = await response.json();
+      const summaryText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      const extractedDecisions = [];
+      const extractedActions = [];
+      const lines = summaryText.split('\n');
+      let currentSection = '';
+
+      for (const line of lines) {
+        const low = line.toLowerCase();
+        if (low.includes('key decision')) { currentSection = 'decisions'; continue; }
+        if (low.includes('action item')) { currentSection = 'actions'; continue; }
+
+        const clean = line.replace(/^[\*\-\d\.\s\[\]x]+/, '').trim();
+        if (clean && (line.trim().startsWith('-') || line.trim().startsWith('*') || /^\d+\./.test(line.trim()))) {
+          if (currentSection === 'decisions') extractedDecisions.push(clean);
+          if (currentSection === 'actions') extractedActions.push(clean);
+        }
+      }
+
+      return {
+        summaryMarkdown: summaryText,
+        decisions: extractedDecisions.length ? extractedDecisions : ["Decisions extracted from meeting transcript."],
+        actions: extractedActions.length ? extractedActions : ["Review meeting notes and follow up on deliverables."],
+        modelUsed: model
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Failed to synthesize summary.');
 }

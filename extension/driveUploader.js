@@ -189,6 +189,48 @@
   }
 
   /**
+   * Streams large audio payloads in 4MB slices over chrome.runtime.connect Port to bypass 64MB IPC limit
+   */
+  function streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress, sliceSize = 4 * 1024 * 1024 }) {
+    return new Promise((resolve, reject) => {
+      const port = chrome.runtime.connect({ name: 'DRIVE_STREAM_UPLOAD' });
+      const totalSlices = Math.ceil(audioBase64.length / sliceSize) || 1;
+      let currentSlice = 0;
+
+      port.onMessage.addListener((response) => {
+        if (response.type === 'SUCCESS') {
+          port.disconnect();
+          resolve(response.data);
+        } else if (response.type === 'ERROR') {
+          port.disconnect();
+          reject(new Error(response.error || 'Streaming upload failed'));
+        } else if (response.type === 'ACK') {
+          if (currentSlice < totalSlices) {
+            const start = currentSlice * sliceSize;
+            const end = Math.min(audioBase64.length, start + sliceSize);
+            const slice = audioBase64.substring(start, end);
+            const progressPct = 50 + Math.round((currentSlice / totalSlices) * 35);
+            if (onProgress) onProgress(progressPct, `Streaming audio slice (${currentSlice + 1}/${totalSlices})...`);
+            port.postMessage({ type: 'CHUNK', chunkIndex: currentSlice, data: slice });
+            currentSlice++;
+          } else {
+            if (onProgress) onProgress(85, `Finalizing Google Drive sync...`);
+            port.postMessage({ type: 'COMPLETE' });
+          }
+        }
+      });
+
+      // Send initial metadata without audio payload
+      const headerPayload = { ...payload, audioBase64: '' };
+      port.postMessage({
+        type: 'START',
+        metadata: { webhookUrl, payload: headerPayload },
+        totalSlices
+      });
+    });
+  }
+
+  /**
    * Upload using Google Apps Script Webhook
    */
   async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, onProgress }) {
@@ -214,7 +256,21 @@
     // Route via extension background service worker to bypass page CSP on meet.jit.si
     let json = null;
     let bgServiceWorkerUsed = false;
-    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
+
+    // Check if payload is large (> 20MB Base64) to proactively use chunked Port streaming
+    const isLargeAudio = audioBase64 && audioBase64.length > 20 * 1024 * 1024;
+
+    if (typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.connect === 'function' && isLargeAudio) {
+      try {
+        onProgress(55, `Streaming large meeting audio (~${(audioBase64.length / 1024 / 1024).toFixed(1)} MB) to service worker...`);
+        json = await streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress });
+        bgServiceWorkerUsed = true;
+      } catch (streamErr) {
+        console.warn('[Drive Uploader] Port streaming encountered error, attempting standard message fallback:', streamErr);
+      }
+    }
+
+    if (!json && typeof chrome !== 'undefined' && chrome.runtime && typeof chrome.runtime.sendMessage === 'function') {
       try {
         json = await new Promise((resolve, reject) => {
           chrome.runtime.sendMessage({
@@ -235,14 +291,24 @@
         });
         bgServiceWorkerUsed = true;
       } catch (bgErr) {
-        // If the background service worker responded with an error from Google Apps Script, do not mask it
-        const isConnectionError = bgErr.message.includes('Could not establish connection') ||
-                                  bgErr.message.includes('Receiving end does not exist') ||
-                                  bgErr.message.includes('Extension context invalidated');
-        if (!isConnectionError) {
-          throw bgErr;
+        // If message exceeded 64MiB limit, fallback to streaming port
+        if (bgErr.message.includes('exceeded maximum allowed size of 64MiB') && typeof chrome.runtime.connect === 'function') {
+          console.log('[Drive Uploader] 64MiB IPC limit hit. Switching to chunked streaming port...');
+          try {
+            json = await streamUploadViaPort({ webhookUrl, payload, audioBase64, onProgress });
+            bgServiceWorkerUsed = true;
+          } catch (portErr) {
+            throw portErr;
+          }
+        } else {
+          const isConnectionError = bgErr.message.includes('Could not establish connection') ||
+                                    bgErr.message.includes('Receiving end does not exist') ||
+                                    bgErr.message.includes('Extension context invalidated');
+          if (!isConnectionError) {
+            throw bgErr;
+          }
+          console.warn('[Drive Uploader] Background worker unavailable, falling back to direct fetch:', bgErr);
         }
-        console.warn('[Drive Uploader] Background worker unavailable, falling back to direct fetch:', bgErr);
       }
     }
 
