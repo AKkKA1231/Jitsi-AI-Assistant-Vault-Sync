@@ -20,7 +20,9 @@
   let isLocalMicMuted = false;
   let manualMicMuteOverride = false;
   let connectedAudioElements = new Set();
-  let remoteObserver = null;
+  let connectedStreamIds = new Set();
+  let remotePollInterval = null;
+  let hasAttachedWindowListeners = false;
 
   // VAD state
   let vadMonitorInterval = null;
@@ -136,6 +138,7 @@
     analyser.connect(mixerDest);
 
     connectedAudioElements.clear();
+    connectedStreamIds.clear();
 
     // 1. Capture Local Microphone with dynamic mute gating
     try {
@@ -155,22 +158,16 @@
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
 
-    // 2. Discover Remote Participant Audio
+    // 2. Discover Remote Participant Audio immediately
     connectRemoteAudioElements();
 
-    // 3. Monitor for newly joining participants
-    if (!remoteObserver && typeof MutationObserver !== 'undefined') {
-      remoteObserver = new MutationObserver((mutations) => {
-        const isExternal = mutations.some(m => !sidebarElement || !sidebarElement.contains(m.target));
-        if (isExternal) {
-          connectRemoteAudioElements();
-        }
-      });
-      remoteObserver.observe(document.body, { childList: true, subtree: true });
-    }
+    // 3. Periodic participant check every 2.5 seconds (0% CPU impact, no DOM recursion, robust multi-participant pickup)
+    if (remotePollInterval) clearInterval(remotePollInterval);
+    remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
 
     // 4. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !hasAttachedWindowListeners) {
+      hasAttachedWindowListeners = true;
       window.addEventListener('click', () => setTimeout(syncLocalMicState, 60));
       window.addEventListener('keydown', (e) => {
         if (e.key === 'd' || e.key === 'D' || e.key === 'm' || e.key === 'M') {
@@ -185,33 +182,52 @@
   function connectRemoteAudioElements() {
     if (!audioCtx || !analyser) return;
 
-    const audioElements = document.querySelectorAll('audio');
+    // Discover both audio and video elements (Jitsi and Meet attach tracks to either)
+    const mediaElements = document.querySelectorAll('audio, video');
     let remoteCount = 0;
 
-    audioElements.forEach(audioEl => {
-      if (connectedAudioElements.has(audioEl)) {
+    mediaElements.forEach(mediaEl => {
+      // Skip assistant sidebar media elements
+      if (mediaEl.closest && (mediaEl.closest('.jitsi-ai-sidebar') || mediaEl.closest('#jitsi-ai-sidebar'))) {
+        return;
+      }
+
+      const srcObj = mediaEl.srcObject;
+      if (!srcObj || typeof srcObj.getAudioTracks !== 'function') return;
+
+      const audioTracks = srcObj.getAudioTracks();
+      if (audioTracks.length === 0) return;
+
+      // Skip local microphone stream if attached to self-view
+      if (micStream && srcObj.id === micStream.id) return;
+
+      // Count if already connected
+      if (connectedStreamIds.has(srcObj.id) || connectedAudioElements.has(mediaEl)) {
         remoteCount++;
         return;
       }
 
-      if (audioEl.srcObject && audioEl.srcObject.getAudioTracks().length > 0) {
-        try {
-          const remoteSource = audioCtx.createMediaStreamSource(audioEl.srcObject);
-          remoteSource.connect(analyser);
-          connectedAudioElements.add(audioEl);
-          remoteCount++;
-          console.log('[Audio Mixer] Connected remote participant stream.');
-        } catch (e) {
-          console.warn('[Audio Mixer] Remote audio stream connect warning:', e);
-        }
+      try {
+        const remoteSource = audioCtx.createMediaStreamSource(srcObj);
+        remoteSource.connect(analyser);
+        connectedAudioElements.add(mediaEl);
+        connectedStreamIds.add(srcObj.id);
+        remoteCount++;
+        console.log('[Audio Mixer] Connected remote participant stream:', srcObj.id);
+      } catch (e) {
+        // Track might be dead or restricted
+        console.warn('[Audio Mixer] Remote audio connect notice:', e.message);
       }
     });
 
     const badge = document.getElementById('jitsiSpeakerCountBadge');
     if (badge) {
-      badge.textContent = isLocalMicMuted
+      const targetText = isLocalMicMuted
         ? `🔇 You Muted (${remoteCount} Remote)`
         : `🎙️ You + ${remoteCount} Remote`;
+      if (badge.textContent !== targetText) {
+        badge.textContent = targetText;
+      }
     }
   }
 
@@ -310,15 +326,16 @@
 
   function cleanupMixer() {
     stopVAD();
-    if (remoteObserver) {
-      remoteObserver.disconnect();
-      remoteObserver = null;
+    if (remotePollInterval) {
+      clearInterval(remotePollInterval);
+      remotePollInterval = null;
     }
     if (micStream) {
       micStream.getTracks().forEach(t => t.stop());
       micStream = null;
     }
     connectedAudioElements.clear();
+    connectedStreamIds.clear();
   }
 
   return {

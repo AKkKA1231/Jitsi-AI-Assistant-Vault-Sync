@@ -189,10 +189,24 @@
   // --------------------------------------------------------------------------
   // Live Speech-to-Text Recognizer
   // --------------------------------------------------------------------------
+  let liveSTTRetryCount = 0;
+  const MAX_LIVE_STT_RETRIES = 3;
+  let liveSTTRestartTimer = null;
+  let isRecordingStarting = false;
+
   function startLiveSTT() {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) return;
+
+    liveSTTRetryCount = 0;
+    if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
+
     try {
+      if (liveSTTRecognizer) {
+        try { liveSTTRecognizer.abort(); } catch (e) {}
+        liveSTTRecognizer = null;
+      }
+
       liveSTTRecognizer = new SpeechRec();
       liveSTTRecognizer.continuous = true;
       liveSTTRecognizer.interimResults = false;
@@ -220,16 +234,29 @@
         }
       };
 
-      liveSTTRecognizer.onerror = () => {
-        if (Recorder.isCurrentlyRecording()) {
-          setTimeout(() => { try { liveSTTRecognizer.start(); } catch (e) {} }, 300);
+      liveSTTRecognizer.onerror = (evt) => {
+        const err = evt ? evt.error : 'unknown';
+        console.warn('[Live STT] Speech recognition notice:', err);
+        // Do not hammer audio service if permission is denied or service unavailable
+        if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
+          liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
         }
       };
+
       liveSTTRecognizer.onend = () => {
-        if (Recorder.isCurrentlyRecording()) {
-          setTimeout(() => { try { liveSTTRecognizer.start(); } catch (e) {} }, 200);
+        if (Recorder.isCurrentlyRecording() && liveSTTRetryCount < MAX_LIVE_STT_RETRIES) {
+          liveSTTRetryCount++;
+          if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
+          liveSTTRestartTimer = setTimeout(() => {
+            if (Recorder.isCurrentlyRecording() && liveSTTRetryCount <= MAX_LIVE_STT_RETRIES) {
+              try {
+                if (liveSTTRecognizer) liveSTTRecognizer.start();
+              } catch (e) {}
+            }
+          }, 2000);
         }
       };
+
       liveSTTRecognizer.start();
     } catch (e) {
       console.warn('[Live STT] Init warning:', e);
@@ -237,8 +264,10 @@
   }
 
   function stopLiveSTT() {
+    if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
+    liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
     if (liveSTTRecognizer) {
-      try { liveSTTRecognizer.stop(); } catch (e) {}
+      try { liveSTTRecognizer.abort(); } catch (e) {}
       liveSTTRecognizer = null;
     }
   }
@@ -247,11 +276,13 @@
   // Core Workflow Actions: Start, Stop, Parallel Transcribe, Drive Upload
   // --------------------------------------------------------------------------
   async function handleToggleRecord() {
+    if (isRecordingStarting) return;
+
     if (Recorder.isCurrentlyRecording()) {
       // 1. Stop active recording
       showToast('Stopping audio capture and finalizing chunks...');
       await Recorder.stopRecording();
-      AudioMixer.stopVAD();
+      AudioMixer.cleanupMixer();
       stopLiveSTT();
 
       // Switch button immediately to "Record Again" so user never loses the ability to record!
@@ -275,7 +306,17 @@
   }
 
   async function startFreshRecording() {
+    if (isRecordingStarting) return;
+    isRecordingStarting = true;
+
+    const recBtn = getEl('jitsiToggleRecordBtn');
+    if (recBtn) {
+      recBtn.disabled = true;
+      recBtn.style.opacity = '0.7';
+    }
+
     try {
+      showToast('Initializing high-fidelity audio capture...');
       const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
       if (Vault.createVaultSession) {
         await Vault.createVaultSession(room);
@@ -310,6 +351,13 @@
     } catch (err) {
       console.error('Failed to start recording:', err);
       showToast('Microphone permission required to start audio capture.', true);
+      UI.setRecordButtonState('idle');
+    } finally {
+      isRecordingStarting = false;
+      if (recBtn) {
+        recBtn.disabled = false;
+        recBtn.style.opacity = '1';
+      }
     }
   }
 
