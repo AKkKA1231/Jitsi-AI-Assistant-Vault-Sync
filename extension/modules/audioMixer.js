@@ -19,6 +19,7 @@
   let micGainNode = null;
   let isLocalMicMuted = false;
   let manualMicMuteOverride = false;
+  let autoMuteSyncEnabled = true;
   let connectedAudioElements = new Set();
   let connectedStreamIds = new Set();
   let remotePollInterval = null;
@@ -32,34 +33,68 @@
   let silenceDurationSec = 0;
 
   /**
-   * Detects whether the user's mic is turned off / muted in Google Meet or Jitsi Meet
+   * Detects whether the user's OWN microphone is turned off / muted in Google Meet or Jitsi Meet.
+   * Completely ignores remote participant tiles, avatar indicators, and screen share video tiles.
    */
   function isMeetingMicMuted() {
+    if (!autoMuteSyncEnabled) return false;
     if (manualMicMuteOverride) return true;
+    if (typeof document === 'undefined') return false;
 
-    // 1. Google Meet detection
+    // 1. Google Meet detection: target exclusively the user's own microphone button in the control bar.
     try {
-      const gmeetBtn = document.querySelector(
-        'button[data-is-muted], div[data-is-muted], button[aria-label*="microphone" i], button[aria-label*="mic" i]'
+      // In Google Meet, the user's personal microphone button uniquely contains
+      // keyboard shortcuts (Ctrl+D / ⌘+D) and explicit action labels ("Turn off microphone" / "Turn on microphone").
+      // Remote participant tiles, video elements, and screen sharing tiles NEVER contain (ctrl + d) or (⌘ + d).
+      const meetSelfMicBtn = document.querySelector(
+        'button[aria-label*="ctrl + d" i], ' +
+        'button[aria-label*="ctrl+d" i], ' +
+        'button[aria-label*="⌘ + d" i], ' +
+        'button[aria-label*="⌘+d" i], ' +
+        'button[data-tooltip*="ctrl + d" i], ' +
+        'button[data-tooltip*="ctrl+d" i], ' +
+        'button[aria-label*="turn off microphone" i], ' +
+        'button[aria-label*="turn on microphone" i]'
       );
-      if (gmeetBtn) {
-        const isMutedAttr = gmeetBtn.getAttribute('data-is-muted');
-        if (isMutedAttr === 'true') return true;
-        if (isMutedAttr === 'false') return false;
 
-        const label = (gmeetBtn.getAttribute('aria-label') || '').toLowerCase();
-        // In Google Meet: "Turn on microphone" means it is currently OFF
-        if (label.includes('turn on microphone') || label.includes('unmute') || label.includes('mic is off')) {
-          return true;
-        }
-        if (label.includes('turn off microphone') || label.includes('mic is on')) {
+      if (meetSelfMicBtn) {
+        const isMutedAttr = meetSelfMicBtn.getAttribute('data-is-muted');
+        const label = (meetSelfMicBtn.getAttribute('aria-label') || '').toLowerCase();
+        const tooltip = (meetSelfMicBtn.getAttribute('data-tooltip') || '').toLowerCase();
+
+        // If the button says "Turn off microphone" or data-is-muted is false -> user is actively UNMUTED (speaking)
+        if (isMutedAttr === 'false' || label.includes('turn off microphone') || tooltip.includes('turn off microphone')) {
           return false;
+        }
+        // If the button says "Turn on microphone" or data-is-muted is true -> user is MUTED
+        if (isMutedAttr === 'true' || label.includes('turn on microphone') || tooltip.includes('turn on microphone')) {
+          return true;
         }
       }
 
-      const gmeetMutedIcon = document.querySelector('i[data-is-muted="true"], [data-is-muted="true"]');
-      if (gmeetMutedIcon) return true;
-    } catch (e) {}
+      // Secondary check: Google Meet bottom control bar only (div[role="region"] or footer)
+      // Excludes participant grid tiles (which are inside [data-participant-id] or main video stage)
+      const bottomToolbar = document.querySelector('div[role="region"][aria-label*="control" i], footer, div[role="region"]');
+      if (bottomToolbar) {
+        const toolbarBtns = bottomToolbar.querySelectorAll('button');
+        for (const btn of toolbarBtns) {
+          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const tooltip = (btn.getAttribute('data-tooltip') || '').toLowerCase();
+          const isMutedAttr = btn.getAttribute('data-is-muted');
+
+          if (label.includes('microphone') || label.includes('mic') || tooltip.includes('microphone')) {
+            if (isMutedAttr === 'false' || label.includes('turn off') || tooltip.includes('turn off')) {
+              return false; // Active / unmuted
+            }
+            if (isMutedAttr === 'true' || label.includes('turn on') || tooltip.includes('turn on')) {
+              return true; // Muted
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Audio Mixer] Meet mic detection notice:', e);
+    }
 
     // 2. Jitsi Meet detection
     try {
@@ -69,25 +104,23 @@
     } catch (e) {}
 
     try {
-      const jitsiBtn = document.querySelector(
-        '#audio-mute, [data-testid="audio-mute"], [aria-label*="mute audio" i], [aria-label*="unmute audio" i], [aria-label*="microphone" i], [aria-label*="mic" i]'
-      );
+      // In Jitsi, local mic button is #audio-mute or [data-testid="audio-mute"] in the bottom toolbar
+      const jitsiBtn = document.querySelector('#audio-mute, [data-testid="audio-mute"], .toolbox-content button[aria-label*="mute" i]');
       if (jitsiBtn) {
         const label = (jitsiBtn.getAttribute('aria-label') || '').toLowerCase();
         const classList = (jitsiBtn.className || '').toLowerCase();
-        const ariaPressed = jitsiBtn.getAttribute('aria-pressed');
-
-        // If aria-label says 'unmute', or button has toggled/selected/muted classes, or aria-pressed is true/false depending on button
-        if (label.includes('unmute') || classList.includes('toggled') || classList.includes('selected') || classList.includes('muted') || classList.includes('audio-muted')) {
+        if (classList.includes('toggled') || classList.includes('selected') || classList.includes('muted') || label.includes('unmute')) {
           return true;
         }
         if (label.includes('mute audio') || label.includes('turn off mic')) {
-          // 'mute audio' action means currently UNMUTED (action will mute it)
           return false;
         }
       }
     } catch (e) {}
 
+    // CRITICAL FAIL-SAFE:
+    // If we cannot definitively verify the user is muted, default to FALSE (UNMUTED).
+    // The user's voice must NEVER be silenced during presentations, screen sharing, or layout shifts!
     return false;
   }
 
@@ -368,6 +401,11 @@
       manualMicMuteOverride = !!muted;
       syncLocalMicState();
     },
+    setAutoMuteSync: (enabled) => {
+      autoMuteSyncEnabled = !!enabled;
+      syncLocalMicState();
+    },
+    getAutoMuteSync: () => autoMuteSyncEnabled,
     syncLocalMicState,
     getStats: () => ({
       activeSpeechDurationSec,

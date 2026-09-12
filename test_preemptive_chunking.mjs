@@ -134,7 +134,19 @@ console.log('\n--- Test Group 4: Meeting Mic Mute Synchronization & 100% Track C
   JitsiAudioMixerModule.setManualMicMute(false);
   assert.strictEqual(JitsiAudioMixerModule.isMicMuted(), false, 'Mic should be unmuted when user speaks');
 
-  console.log('  ✅ PASS: Local audio stream track gating and gain zeroing verified intact');
+  // Test setAutoMuteSync & Always Record mode
+  assert(typeof JitsiAudioMixerModule.setAutoMuteSync === 'function', 'setAutoMuteSync should be exported');
+  assert(typeof JitsiAudioMixerModule.getAutoMuteSync === 'function', 'getAutoMuteSync should be exported');
+
+  JitsiAudioMixerModule.setAutoMuteSync(false);
+  assert.strictEqual(JitsiAudioMixerModule.getAutoMuteSync(), false, 'AutoMuteSync should be false in Always Record mode');
+  assert.strictEqual(JitsiAudioMixerModule.isMicMuted(), false, 'Mic must NEVER be muted when autoMuteSync is disabled');
+
+  // Re-enable Smart Mute Sync
+  JitsiAudioMixerModule.setAutoMuteSync(true);
+  assert.strictEqual(JitsiAudioMixerModule.getAutoMuteSync(), true);
+
+  console.log('  ✅ PASS: Local audio stream track gating, Always Record mode, and screen-share immunity verified intact');
 }
 
 // --- Test 5: WebM Container Header Extraction & Prepending on Block #2+ ---

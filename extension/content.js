@@ -78,6 +78,14 @@
     const savedMode = window.localStorage.getItem(STORAGE_DRIVE_SYNC_MODE_KEY);
     if (savedMode) savedDriveSyncMode = savedMode;
   } catch (e) {}
+
+  const STORAGE_MIC_MODE_KEY = 'jitsi_plugin_mic_mode';
+  let savedMicMode = 'smart_sync';
+  try {
+    const sMic = window.localStorage.getItem(STORAGE_MIC_MODE_KEY);
+    if (sMic) savedMicMode = sMic;
+  } catch (e) {}
+
   let activeMeetingBlockTranscripts = {};
 
   function getEl(id) {
@@ -110,6 +118,7 @@
       window.localStorage.setItem(STORAGE_ACTIVE_KEY, String(activeAccIdx));
       window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey);
       window.localStorage.setItem(STORAGE_CHUNK_DURATION_KEY, String(savedBlockDurationMins));
+      window.localStorage.setItem(STORAGE_MIC_MODE_KEY, savedMicMode);
       if (typeof chrome !== 'undefined' && chrome.storage) {
         const area = chrome.storage.sync || chrome.storage.local;
         if (area) {
@@ -117,7 +126,8 @@
             [STORAGE_KEY]: accounts,
             [STORAGE_ACTIVE_KEY]: activeAccIdx,
             [STORAGE_AI_KEY]: geminiApiKey,
-            [STORAGE_CHUNK_DURATION_KEY]: savedBlockDurationMins
+            [STORAGE_CHUNK_DURATION_KEY]: savedBlockDurationMins,
+            [STORAGE_MIC_MODE_KEY]: savedMicMode
           });
         }
       }
@@ -130,7 +140,7 @@
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const area = chrome.storage.sync || chrome.storage.local;
       if (area) {
-        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY], (res) => {
+        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY, STORAGE_MIC_MODE_KEY], (res) => {
           if (!res) return;
           if (res[STORAGE_AI_KEY]) geminiApiKey = res[STORAGE_AI_KEY].trim();
           if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = res[STORAGE_KEY];
@@ -138,6 +148,12 @@
           if (res[STORAGE_CHUNK_DURATION_KEY]) {
             savedBlockDurationMins = Number(res[STORAGE_CHUNK_DURATION_KEY]) || 5;
             Recorder.setBlockDuration(savedBlockDurationMins);
+          }
+          if (res[STORAGE_MIC_MODE_KEY]) {
+            savedMicMode = res[STORAGE_MIC_MODE_KEY];
+            if (AudioMixer.setAutoMuteSync) {
+              AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
+            }
           }
           updateAccountUI();
           updateAiKeyDisplay();
@@ -366,6 +382,9 @@
       activeMeetingBlockTranscripts = {};
       Recorder.setBlockDuration(savedBlockDurationMins);
       AudioMixer.resetVADStats();
+      if (AudioMixer.setAutoMuteSync) {
+        AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
+      }
       const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'));
       AudioMixer.initVAD(() => Recorder.isCurrentlyRecording());
 
@@ -891,6 +910,21 @@
           </select>
         </div>
 
+        <div class="jitsi-ai-ext-section-title">Microphone Capture & Screen Share Mode</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:600; color:#fff;">Mic Auto-Mute Synchronization</span>
+            <span id="jitsiMicModeBadge" class="jitsi-ai-badge" style="font-size:10px; color:#10b981;">Smart Mute Sync</span>
+          </div>
+          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+            Prevents your voice from being silenced when someone is screen sharing or other participants are muted.
+          </p>
+          <select id="jitsiMicModeSelect" style="width:100%; padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; cursor:pointer;">
+            <option value="smart_sync" selected>🎙️ Smart Mute Sync (Pause mic only when YOU mute in Meet/Jitsi)</option>
+            <option value="always_record">🔴 Always Record Mic (Never mute mic audio, recommended for presentations)</option>
+          </select>
+        </div>
+
         <div class="jitsi-ai-ext-section-title">Google Drive Sync Optimization</div>
         <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -1058,6 +1092,51 @@
           header.innerHTML = `${savedBlockDurationMins}-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">${count}</span>)`;
         }
         showToast(`Chunk duration set to ${savedBlockDurationMins} minutes!`);
+      };
+    }
+
+    const micModeSelect = getEl('jitsiMicModeSelect');
+    if (micModeSelect) {
+      micModeSelect.value = savedMicMode;
+      const updateMicBadge = (mode) => {
+        const b = getEl('jitsiMicModeBadge');
+        if (b) {
+          b.textContent = mode === 'always_record' ? 'Always Record (No Mute)' : 'Smart Mute Sync';
+          b.style.color = mode === 'always_record' ? '#f59e0b' : '#10b981';
+        }
+      };
+      updateMicBadge(savedMicMode);
+
+      micModeSelect.onchange = () => {
+        savedMicMode = micModeSelect.value || 'smart_sync';
+        window.localStorage.setItem(STORAGE_MIC_MODE_KEY, savedMicMode);
+        saveSettings();
+        if (AudioMixer.setAutoMuteSync) {
+          AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
+        }
+        updateMicBadge(savedMicMode);
+        showToast(`Mic mode: ${savedMicMode === 'always_record' ? 'Always Record (Never Muted)' : 'Smart Mute Sync Active'}`);
+      };
+    }
+
+    const speakerCountBadge = getEl('jitsiSpeakerCountBadge');
+    if (speakerCountBadge) {
+      speakerCountBadge.style.cursor = 'pointer';
+      speakerCountBadge.title = 'Click to switch between Smart Mute Sync and Always Record';
+      speakerCountBadge.onclick = () => {
+        savedMicMode = (savedMicMode === 'always_record') ? 'smart_sync' : 'always_record';
+        window.localStorage.setItem(STORAGE_MIC_MODE_KEY, savedMicMode);
+        saveSettings();
+        if (AudioMixer.setAutoMuteSync) {
+          AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
+        }
+        if (micModeSelect) micModeSelect.value = savedMicMode;
+        const b = getEl('jitsiMicModeBadge');
+        if (b) {
+          b.textContent = savedMicMode === 'always_record' ? 'Always Record (No Mute)' : 'Smart Mute Sync';
+          b.style.color = savedMicMode === 'always_record' ? '#f59e0b' : '#10b981';
+        }
+        showToast(`Switched Mic Mode to: ${savedMicMode === 'always_record' ? 'Always Record (Never Muted)' : 'Smart Mute Sync'}`);
       };
     }
 
