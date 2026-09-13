@@ -67,50 +67,73 @@
       return { index: block ? block.index : 0, transcript: '' };
     }
 
-    try {
-      const base64Data = await blobToBase64(block.blob);
-      const result = await new Promise((resolve, reject) => {
-        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage({
-            action: 'GEMINI_TRANSCRIBE_CHUNK',
-            apiKey,
-            base64Audio: base64Data,
-            mimeType: block.blob.type || 'audio/webm',
-            chunkIndex: block.index,
-            totalChunks: 1,
-            startTime: block.startTime,
-            endTime: block.endTime,
-            roomName: roomName || 'meeting'
-          }, (res) => {
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-            } else if (res && res.success) {
-              resolve(res.data);
-            } else {
-              reject(new Error(res?.error || 'Block transcription failed'));
-            }
-          });
-        } else {
-          resolve({ chunkIndex: block.index, transcript: `[Block #${block.index}] Audio transcribed successfully.` });
-        }
-      });
+    if (!block || !block.blob) {
+      return { index: block?.index || 1, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '' };
+    }
 
+    // Ignore tiny silence / partial stubs (< 1.5 KB) to avoid Google audio demuxer errors
+    if (block.blob.size < 1500) {
       return {
         index: block.index,
         startTime: block.startTime,
         endTime: block.endTime,
         durationSec: block.durationSec,
-        transcript: result.transcript || ''
+        transcript: ''
       };
-    } catch (err) {
-      console.warn(`[Transcriber] Preemptive transcription error on Block #${block.index}:`, err);
-      return {
-        index: block.index,
-        startTime: block.startTime,
-        endTime: block.endTime,
-        durationSec: block.durationSec,
-        transcript: `[Spoken segment ${block.startTime}-${block.endTime} captured (${block.sizeKb || 'audio'} KB)]`
-      };
+    }
+
+    const maxRetries = 2;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const base64Data = await blobToBase64(block.blob);
+        const result = await new Promise((resolve, reject) => {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({
+              action: 'GEMINI_TRANSCRIBE_CHUNK',
+              apiKey,
+              base64Audio: base64Data,
+              mimeType: block.blob.type || 'audio/webm',
+              chunkIndex: block.index,
+              totalChunks: 1,
+              startTime: block.startTime,
+              endTime: block.endTime,
+              roomName: roomName || 'meeting'
+            }, (res) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+              } else if (res && res.success) {
+                resolve(res.data);
+              } else {
+                reject(new Error(res?.error || 'Block transcription failed'));
+              }
+            });
+          } else {
+            resolve({ chunkIndex: block.index, transcript: `[Block #${block.index}] Audio transcribed successfully.` });
+          }
+        });
+
+        return {
+          index: block.index,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          durationSec: block.durationSec,
+          transcript: result.transcript || ''
+        };
+      } catch (err) {
+        if (attempt < maxRetries) {
+          console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1500ms (attempt ${attempt + 1}/${maxRetries})...`);
+          await new Promise(r => setTimeout(r, 1500));
+          continue;
+        }
+        console.log(`[Transcriber] Preemptive transcription deferred on Block #${block.index} (will compile at meeting end): ${err.message || err}`);
+        return {
+          index: block.index,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          durationSec: block.durationSec,
+          transcript: `[Spoken segment ${block.startTime}-${block.endTime} captured (${block.sizeKb || 'audio'} KB)]`
+        };
+      }
     }
   }
 

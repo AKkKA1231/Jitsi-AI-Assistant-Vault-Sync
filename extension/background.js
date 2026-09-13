@@ -196,6 +196,16 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
 }
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
+
+// Active production models from Google (verified endpoints)
+const ACTIVE_GEMINI_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-lite'
+];
+
+// Compatibility cascade for tests & fallbacks
 const GEMINI_MODELS = [
   'gemini-2.0-flash',
   'gemini-1.5-flash',
@@ -206,15 +216,32 @@ const GEMINI_MODELS = [
   'gemini-3.1-flash-lite'
 ];
 
-async function fetchWithBackoff(url, options, maxRetries = 1) {
+async function fetchWithBackoff(url, options, maxRetries = 3) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await fetch(url, options);
-    if ((response.status === 503 || response.status === 429) && attempt < maxRetries) {
-      console.warn(`[Gemini Background] HTTP ${response.status} (Demand Spike) encountered. Retrying in 1000ms...`);
-      await new Promise(r => setTimeout(r, 1000));
-      continue;
+    try {
+      const response = await fetch(url, options);
+      const isTransient = response.status === 500 || 
+                          response.status === 502 || 
+                          response.status === 503 || 
+                          response.status === 504 || 
+                          response.status === 429;
+
+      if (isTransient && attempt < maxRetries) {
+        const delay = Math.min(6000, 1200 * Math.pow(1.8, attempt)); // ~1.2s, ~2.1s, ~3.8s
+        console.warn(`[Gemini Background] HTTP ${response.status} (Transient Error) on attempt ${attempt + 1}/${maxRetries}. Retrying in ${Math.round(delay)}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return response;
+    } catch (networkErr) {
+      if (attempt < maxRetries) {
+        const delay = 1500 * (attempt + 1);
+        console.warn(`[Gemini Background] Network error (${networkErr.message}). Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw networkErr;
     }
-    return response;
   }
 }
 
@@ -261,7 +288,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
   };
 
   let lastError = null;
-  for (const model of GEMINI_MODELS) {
+  for (const model of ACTIVE_GEMINI_MODELS) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       console.log(`[Gemini Background] Requesting transcription via ${model}...`);
@@ -355,7 +382,7 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
   };
 
   let lastError = null;
-  for (const model of GEMINI_MODELS) {
+  for (const model of ACTIVE_GEMINI_MODELS) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       const response = await fetchWithBackoff(url, {
