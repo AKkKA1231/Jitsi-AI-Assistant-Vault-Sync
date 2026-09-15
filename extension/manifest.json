@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Jitsi AI Assistant & Google Drive Sync",
+  "name": "Meetings_AI Assistant",
   "version": "1.1.0",
-  "description": "Free AI meeting notes, continuous Speech-to-Text, and automated Google Drive upload with 1-click multi-account switcher for Jitsi Meet calls.",
+  "description": "Free AI meeting notes, continuous Speech-to-Text, and automated Google Drive upload with 1-click multi-account switcher.",
   "permissions": [
     "storage",
     "activeTab"
@@ -15,7 +15,8 @@
     "https://generativelanguage.googleapis.com/*",
     "https://www.googleapis.com/*",
     "https://script.google.com/*",
-    "https://script.googleusercontent.com/*"
+    "https://script.googleusercontent.com/*",
+    "https://hooks.slack.com/*"
   ],
   "background": {
     "service_worker": "background.js"

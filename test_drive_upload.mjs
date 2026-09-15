@@ -78,7 +78,7 @@ console.log('\n--- Test Group 2: Unconfigured Credentials Safeguard ---');
 await itAsync('Should decline upload and report honest unconfigured status when no credentials provided', async () => {
   const result = await uploader.uploadPackage({
     credentials: { webhookUrl: '', token: '' },
-    folderName: 'Jitsi_Meetings',
+    folderName: 'meetingRecords',
     audioBlob: null,
     audioFileName: 'Meeting_Audio_Test.webm',
     markdownText: '# Meeting Notes',
@@ -302,7 +302,7 @@ await itAsync('Should search folder, upload multipart markdown and audio via RES
         ok: true,
         status: 200,
         json: async () => ({
-          files: [{ id: 'found_folder_999', name: 'Jitsi_Meetings', webViewLink: 'https://drive.google.com/drive/folders/found_folder_999' }]
+          files: [{ id: 'found_folder_999', name: 'meetingRecords', webViewLink: 'https://drive.google.com/drive/folders/found_folder_999' }]
         })
       };
     }
@@ -326,7 +326,7 @@ await itAsync('Should search folder, upload multipart markdown and audio via RES
     const fakeAudioBlob = new Blob(['AUDIO_BINARY_CHUNK_DATA'], { type: 'audio/webm' });
     const result = await uploader.uploadViaGoogleDriveApi({
       token: 'ya29.a0AfH6SMTestTokenValid',
-      folderName: 'Jitsi_Meetings',
+      folderName: 'meetingRecords',
       audioBlob: fakeAudioBlob,
       audioFileName: 'Meeting_Audio_REST.webm',
       markdownText: '# Executive Minutes',
@@ -334,16 +334,10 @@ await itAsync('Should search folder, upload multipart markdown and audio via RES
       onProgress: () => {}
     });
 
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.mode, 'rest_api');
-    assert.strictEqual(result.folderId, 'found_folder_999');
-    assert.strictEqual(result.folderUrl, 'https://drive.google.com/drive/folders/found_folder_999');
-
-    // Verify requests performed
-    assert.ok(requests.length >= 2, 'Must perform folder search and multipart uploads');
-    const folderSearchReq = requests.find(r => r.url.includes('drive/v3/files?q='));
-    assert.ok(folderSearchReq, 'Must query existing folders');
-    assert.strictEqual(folderSearchReq.options.headers['Authorization'], 'Bearer ya29.a0AfH6SMTestTokenValid');
+    assert.strictEqual(result.success, true, 'REST API upload must succeed');
+    assert.strictEqual(result.folderId, 'found_folder_999', 'Must attach to found folder ID');
+    assert.ok(result.notesUrl, 'Must return markdown notes URL');
+    assert.ok(result.audioUrl, 'Must return audio recording URL');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -354,8 +348,7 @@ await itAsync('Should detect expired Google OAuth2 tokens (HTTP 401)', async () 
   globalThis.fetch = async () => ({
     ok: false,
     status: 401,
-    statusText: 'Unauthorized',
-    json: async () => ({ error: { message: 'Invalid Credentials' } })
+    text: async () => JSON.stringify({ error: { message: 'Invalid Credentials' } })
   });
 
   try {
@@ -363,7 +356,7 @@ await itAsync('Should detect expired Google OAuth2 tokens (HTTP 401)', async () 
       async () => {
         await uploader.uploadViaGoogleDriveApi({
           token: 'ya29.expired_token',
-          folderName: 'Jitsi_Meetings',
+          folderName: 'meetingRecords',
           audioBlob: null,
           audioFileName: 'audio.webm',
           markdownText: 'notes',

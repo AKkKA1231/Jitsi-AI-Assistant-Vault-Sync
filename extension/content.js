@@ -1,5 +1,5 @@
 /**
- * Jitsi AI Assistant - Core Injected Content Script Orchestrator
+ * Meetings_AI Assistant - Core Injected Content Script Orchestrator
  * Connects modular components:
  * - JitsiVault: Fault-tolerant persistent IndexedDB recovery
  * - JitsiAudioMixer: Multi-stream WebRTC mixer & VAD silence filtering
@@ -10,7 +10,7 @@
  */
 
 (function () {
-  console.log('[Jitsi AI Assistant] Initializing modular architecture...');
+  console.log('[Meetings_AI Assistant] Initializing modular architecture...');
 
   // --------------------------------------------------------------------------
   // Storage Keys & Multi-Account State Management
@@ -34,7 +34,7 @@
       name: 'Account 1 (Primary Drive)',
       clientId: 'primary-drive-user@gmail.com',
       clientSecret: '••••••••••••••••••••',
-      folderName: 'Jitsi_Meetings',
+      folderName: 'meetingRecords',
       webhookUrl: '',
       token: ''
     },
@@ -43,7 +43,7 @@
       name: 'Account 2 (Backup Drive)',
       clientId: 'backup-drive-user@gmail.com',
       clientSecret: '••••••••••••••••••••',
-      folderName: 'Jitsi_Meetings_Archive',
+      folderName: 'meetingRecords_Archive',
       webhookUrl: '',
       token: ''
     }
@@ -52,8 +52,17 @@
   let accounts = DEFAULT_ACCOUNTS;
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved) accounts = JSON.parse(saved);
-  } catch (e) {}
+    if (saved) {
+      accounts = JSON.parse(saved);
+      // Automatically migrate legacy default folder names
+      accounts.forEach(acc => {
+        if (acc.folderName === 'Jitsi_Meetings') acc.folderName = 'meetingRecords';
+        if (acc.folderName === 'Jitsi_Meetings_Archive') acc.folderName = 'meetingRecords_Archive';
+      });
+    }
+  } catch (e) {
+    accounts = DEFAULT_ACCOUNTS;
+  }
 
   let activeAccIdx = 0;
   try {
@@ -86,6 +95,21 @@
     if (sMic) savedMicMode = sMic;
   } catch (e) {}
 
+  const STORAGE_SLACK_WEBHOOK_KEY = 'jitsi_slack_webhook_url';
+  let savedSlackWebhookUrl = '';
+  try {
+    const sSlack = window.localStorage.getItem(STORAGE_SLACK_WEBHOOK_KEY);
+    if (sSlack) savedSlackWebhookUrl = sSlack;
+  } catch (e) {}
+
+  const STORAGE_SLACK_AUTO_KEY = 'jitsi_slack_auto_share';
+  let savedSlackAutoShare = true;
+  try {
+    const sAuto = window.localStorage.getItem(STORAGE_SLACK_AUTO_KEY);
+    if (sAuto !== null) savedSlackAutoShare = sAuto === 'true';
+  } catch (e) {}
+
+  let lastUploadedFolderUrl = '';
   let activeMeetingBlockTranscripts = {};
 
   function getEl(id) {
@@ -112,6 +136,29 @@
     }
   }
 
+  function updateSlackUI() {
+    const badge = document.getElementById('jitsiSlackBadge');
+    if (badge) {
+      if (savedSlackWebhookUrl && savedSlackWebhookUrl.includes('hooks.slack.com')) {
+        badge.textContent = '✓ Slack Connected';
+        badge.style.color = '#34d399';
+        badge.style.background = 'rgba(16,185,129,0.2)';
+      } else {
+        badge.textContent = 'No Webhook';
+        badge.style.color = '#94a3b8';
+        badge.style.background = 'rgba(255,255,255,0.06)';
+      }
+    }
+    const input = document.getElementById('jitsiSlackWebhookInput');
+    if (input && document.activeElement !== input) {
+      input.value = savedSlackWebhookUrl || '';
+    }
+    const autoBox = document.getElementById('jitsiSlackAutoShareCheck');
+    if (autoBox) {
+      autoBox.checked = savedSlackAutoShare;
+    }
+  }
+
   function saveSettings() {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
@@ -119,6 +166,8 @@
       window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey);
       window.localStorage.setItem(STORAGE_CHUNK_DURATION_KEY, String(savedBlockDurationMins));
       window.localStorage.setItem(STORAGE_MIC_MODE_KEY, savedMicMode);
+      window.localStorage.setItem(STORAGE_SLACK_WEBHOOK_KEY, savedSlackWebhookUrl);
+      window.localStorage.setItem(STORAGE_SLACK_AUTO_KEY, String(savedSlackAutoShare));
       if (typeof chrome !== 'undefined' && chrome.storage) {
         const area = chrome.storage.sync || chrome.storage.local;
         if (area) {
@@ -127,12 +176,15 @@
             [STORAGE_ACTIVE_KEY]: activeAccIdx,
             [STORAGE_AI_KEY]: geminiApiKey,
             [STORAGE_CHUNK_DURATION_KEY]: savedBlockDurationMins,
-            [STORAGE_MIC_MODE_KEY]: savedMicMode
+            [STORAGE_MIC_MODE_KEY]: savedMicMode,
+            [STORAGE_SLACK_WEBHOOK_KEY]: savedSlackWebhookUrl,
+            [STORAGE_SLACK_AUTO_KEY]: savedSlackAutoShare
           });
         }
       }
     } catch (e) {}
     updateAiKeyDisplay();
+    updateSlackUI();
   }
 
   // Hydrate settings asynchronously from chrome.storage
@@ -140,7 +192,7 @@
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const area = chrome.storage.sync || chrome.storage.local;
       if (area) {
-        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY, STORAGE_MIC_MODE_KEY], (res) => {
+        area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY, STORAGE_MIC_MODE_KEY, STORAGE_SLACK_WEBHOOK_KEY, STORAGE_SLACK_AUTO_KEY], (res) => {
           if (!res) return;
           if (res[STORAGE_AI_KEY]) geminiApiKey = res[STORAGE_AI_KEY].trim();
           if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = res[STORAGE_KEY];
@@ -155,8 +207,11 @@
               AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
             }
           }
+          if (res[STORAGE_SLACK_WEBHOOK_KEY]) savedSlackWebhookUrl = res[STORAGE_SLACK_WEBHOOK_KEY].trim();
+          if (typeof res[STORAGE_SLACK_AUTO_KEY] === 'boolean') savedSlackAutoShare = res[STORAGE_SLACK_AUTO_KEY];
           updateAccountUI();
           updateAiKeyDisplay();
+          updateSlackUI();
         });
       }
 
@@ -165,6 +220,10 @@
           geminiApiKey = changes[STORAGE_AI_KEY].newValue.trim();
           updateAccountUI();
           updateAiKeyDisplay();
+        }
+        if (changes[STORAGE_SLACK_WEBHOOK_KEY] && changes[STORAGE_SLACK_WEBHOOK_KEY].newValue) {
+          savedSlackWebhookUrl = changes[STORAGE_SLACK_WEBHOOK_KEY].newValue.trim();
+          updateSlackUI();
         }
       });
     }
@@ -200,6 +259,7 @@
   let isDriveUploading = false;
   let liveSTTRecognizer = null;
   let liveCapturedTranscripts = [];
+  let meetingRecordingStartTime = null;
 
   function getEl(id) {
     return document.getElementById(id);
@@ -255,7 +315,8 @@
             const text = evt.results[i][0].transcript.trim();
             if (text.length > 1) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              liveCapturedTranscripts.push({ time: timeStr, text });
+              const elapsedSec = meetingRecordingStartTime ? Math.round((Date.now() - meetingRecordingStartTime) / 1000) : 0;
+              liveCapturedTranscripts.push({ time: timeStr, elapsedSec, text });
               const tBox = getEl('jitsiTranscriptBox');
               if (tBox) {
                 const item = document.createElement('div');
@@ -380,6 +441,7 @@
 
       // Reset state and configure block duration
       activeMeetingBlockTranscripts = {};
+      meetingRecordingStartTime = Date.now();
       Recorder.setBlockDuration(savedBlockDurationMins);
       AudioMixer.resetVADStats();
       if (AudioMixer.setAutoMuteSync) {
@@ -418,9 +480,13 @@
           UI.renderBlockItem(sealedBlock, 'transcribing');
           showToast(`⚡ Sealed Block #${sealedBlock.index} [${sealedBlock.startTime}-${sealedBlock.endTime}]. Transcribing with Gemini Flash in background...`);
 
-          // 2. Preemptively transcribe in background while meeting continues
+          // 2. Preemptively transcribe in background with Web Speech STT fallback
           const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
-          Transcriber.transcribeSingleBlock(sealedBlock, { apiKey: activeKey, roomName: room }).then((result) => {
+          Transcriber.transcribeSingleBlock(sealedBlock, {
+            apiKey: activeKey,
+            roomName: room,
+            liveTranscripts: liveCapturedTranscripts
+          }).then((result) => {
             activeMeetingBlockTranscripts[sealedBlock.index] = result;
             UI.updateBlockStatus(sealedBlock.index, 'completed', result.transcript);
             showToast(`✅ Block #${sealedBlock.index} transcribed in background!`);
@@ -467,7 +533,7 @@
    * Fast Meeting-End Compilation:
    * Merges all precomputed background transcripts and transcribes only the final partial block.
    */
-  async function executeParallelTranscription() {
+  async function executeParallelTranscription({ forceRetry = false } = {}) {
     if (isTranscribing) return;
     isTranscribing = true;
 
@@ -494,6 +560,9 @@
         precomputedTranscripts: activeMeetingBlockTranscripts,
         apiKey: activeKey,
         roomName: room,
+        liveTranscripts: liveCapturedTranscripts,
+        unifiedAudioBlob: compiledAudioBlob,
+        forceRetry: forceRetry,
         onProgress: (pct, msg) => {
           const statusEl = getEl('jitsiUploadStatusText');
           if (statusEl) statusEl.textContent = msg;
@@ -573,7 +642,7 @@
 
       const result = await uploader.uploadPackage({
         credentials: creds,
-        folderName: acc.folderName || 'Jitsi_Meetings',
+        folderName: acc.folderName || 'meetingRecords',
         roomName: room,
         audioBlob: audioToUpload,
         audioFileName: audioFileName,
@@ -591,7 +660,9 @@
           progressBar.style.width = '100%';
           progressBar.style.backgroundColor = '#10b981';
         }
-        const folderUrl = result.folderUrl || 'https://drive.google.com/drive/my-drive';
+        const dedicatedFolderFallback = `https://drive.google.com/drive/search?q=${encodeURIComponent(acc.folderName || 'meetingRecords')}`;
+        const folderUrl = result.folderUrl || (result.folderId ? `https://drive.google.com/drive/folders/${result.folderId}` : dedicatedFolderFallback);
+        lastUploadedFolderUrl = folderUrl;
         const successMsg = isNotesOnly
           ? `✅ <strong>Success!</strong> Meeting notes synced to Google Drive (instant &lt; 1s mode). Local audio saved.`
           : `✅ <strong>Success!</strong> Audio &amp; notes uploaded to Google Drive: <code>${UI.escapeHtml(acc.folderName)}</code>.`;
@@ -601,11 +672,26 @@
           openDriveLink.textContent = '📂 Open Folder in Google Drive';
           openDriveLink.style.display = 'block';
         }
+
+        const shareSlackBtn = getEl('jitsiShareSlackBtn');
+        if (shareSlackBtn) {
+          shareSlackBtn.style.display = 'block';
+          shareSlackBtn.textContent = '📢 Share to Slack Channel';
+          shareSlackBtn.style.background = '';
+          shareSlackBtn.style.color = '';
+          shareSlackBtn.onclick = () => dispatchSlackNotification({ folderUrl, isManual: true });
+        }
+
         if (isNotesOnly && compiledAudioBlob) {
           triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
         }
         if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Uploaded to Google Drive (${acc.name})!`);
+
+        // Automatic dispatch to Slack if enabled
+        if (savedSlackAutoShare && savedSlackWebhookUrl) {
+          dispatchSlackNotification({ folderUrl, isManual: false });
+        }
       } else if (result.isUnconfigured) {
         // Safe offline preservation
         if (compiledAudioBlob) triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
@@ -643,6 +729,81 @@
       isDriveUploading = false;
       // Record button is always visible & ready for next recording
       UI.setRecordButtonState('record_again');
+    }
+  }
+
+  /**
+   * Dispatches meeting notes & Google Drive folder URL to Slack Webhook
+   */
+  async function dispatchSlackNotification({ folderUrl, isManual = false } = {}) {
+    const activeAcc = (typeof accounts !== 'undefined' && accounts && accounts[activeAccIdx]) || {};
+    const dedicatedFallback = `https://drive.google.com/drive/search?q=${encodeURIComponent(activeAcc.folderName || 'meetingRecords')}`;
+    const targetUrl = folderUrl || lastUploadedFolderUrl || dedicatedFallback;
+    if (!savedSlackWebhookUrl || !savedSlackWebhookUrl.includes('hooks.slack.com')) {
+      if (isManual) {
+        showToast('Please configure your Slack Webhook URL in Settings (⚙️).', true);
+        UI.switchTab('settings');
+      }
+      return;
+    }
+
+    const room = window.location.pathname.replace('/', '') || 'Meeting';
+    const shareBtn = getEl('jitsiShareSlackBtn');
+    if (shareBtn) {
+      shareBtn.disabled = true;
+      shareBtn.textContent = '⏳ Sharing to Slack...';
+    }
+
+    try {
+      if (isManual) showToast('📢 Posting meeting notes to Slack...');
+
+      const decBox = getEl('jitsiDecisionsBox');
+      const actBox = getEl('jitsiActionsBox');
+      const decisions = decBox ? Array.from(decBox.querySelectorAll('div')).map(d => d.textContent.trim()) : [];
+      const actions = actBox ? Array.from(actBox.querySelectorAll('.jitsi-ai-ext-task-item span')).map(a => a.textContent.trim()) : [];
+      const cleanTime = getEl('jitsiCleanSpeechTime')?.textContent || '';
+      const audioSize = compiledAudioBlob ? (compiledAudioBlob.size / 1024).toFixed(1) : '';
+
+      await new Promise((resolve, reject) => {
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            action: 'SLACK_SEND_NOTIFICATION',
+            webhookUrl: savedSlackWebhookUrl,
+            roomName: room,
+            folderUrl: targetUrl,
+            decisions,
+            actions,
+            durationStr: cleanTime,
+            audioSizeKb: audioSize
+          }, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else if (response && response.success) {
+              resolve(response.data);
+            } else {
+              reject(new Error(response?.error || 'Slack delivery failed'));
+            }
+          });
+        } else {
+          resolve({ success: true });
+        }
+      });
+
+      showToast('✅ Google Drive link and AI notes shared to Slack!');
+      if (shareBtn) {
+        shareBtn.textContent = '✅ Shared to Slack';
+        shareBtn.style.background = 'rgba(16,185,129,0.2)';
+        shareBtn.style.color = '#34d399';
+        shareBtn.style.borderColor = 'rgba(16,185,129,0.4)';
+      }
+    } catch (slackErr) {
+      console.warn('[Slack Dispatch Notice]:', slackErr);
+      if (isManual) showToast(`Slack error: ${slackErr.message}`, true);
+      if (shareBtn) {
+        shareBtn.textContent = '📢 Share to Slack Channel';
+      }
+    } finally {
+      if (shareBtn) shareBtn.disabled = false;
     }
   }
 
@@ -761,7 +922,7 @@
       <div class="jitsi-ai-ext-drive-bar">
         <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px;">
           <span>Target:</span> <strong id="jitsiDriveAccName" style="color:#f8fafc;">Account 1</strong>
-          <span id="jitsiDriveEmailDisplay" style="font-size:10px; opacity:0.8; display:block;">Folder: Jitsi_Meetings</span>
+          <span id="jitsiDriveEmailDisplay" style="font-size:10px; opacity:0.8; display:block;">Folder: meetingRecords</span>
         </div>
         <button class="jitsi-ai-ext-switch-btn" id="jitsiSwitchAccBtn" title="Switch Account">⚙️ Accounts</button>
       </div>
@@ -940,6 +1101,26 @@
           </select>
         </div>
 
+        <div class="jitsi-ai-ext-section-title">Slack Notification & Drive Link Automation</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+            <span style="font-size:11px; font-weight:600; color:#fff;">Slack Incoming Webhook URL</span>
+            <span id="jitsiSlackBadge" class="jitsi-ai-badge" style="font-size:10px;">No Webhook</span>
+          </div>
+          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+            Automatically posts the generated Google Drive folder link, audio, and AI minutes to your Slack channel.
+          </p>
+          <input type="url" id="jitsiSlackWebhookInput" placeholder="https://hooks.slack.com/services/T.../B.../X..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+            <input type="checkbox" id="jitsiSlackAutoShareCheck" checked style="accent-color:#10b981; cursor:pointer;">
+            <label for="jitsiSlackAutoShareCheck" style="font-size:11px; color:#cbd5e1; cursor:pointer;">Auto-share Drive link & summary to Slack after upload</label>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="jitsiSaveSlackBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; font-size:11px;">💾 Save Slack Config</button>
+            <button id="jitsiTestSlackBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🔔 Test Slack</button>
+          </div>
+        </div>
+
         <div class="jitsi-ai-ext-section-title">Google Drive Multi-Account Config</div>
         <div class="jitsi-ai-ext-card jitsi-ai-card">
           <div class="jitsi-ai-pill-row" style="display:flex; gap:6px; margin-bottom:10px;">
@@ -951,7 +1132,7 @@
           <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Google OAuth2 Access Token (Optional):</div>
           <input type="password" id="jitsiAccTokenInput" placeholder="ya29..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Target Drive Folder Name:</div>
-          <input type="text" id="jitsiAccFolderInput" placeholder="Jitsi_Meetings" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
+          <input type="text" id="jitsiAccFolderInput" placeholder="meetingRecords" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <button id="jitsiSaveAccBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="width:100%; font-size:11px;">💾 Save Account Settings</button>
         </div>
       </div>
@@ -968,6 +1149,7 @@
         <div id="jitsiUploadStatusText" style="font-size:11px; color:#cbd5e1; margin-bottom:8px;">Preparing package...</div>
         <div id="jitsiUploadActions" style="display:flex; flex-direction:column; gap:6px;">
           <a id="jitsiOpenDriveLink" href="#" target="_blank" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="text-align:center; text-decoration:none; display:none;">📂 Open in Google Drive</a>
+          <button id="jitsiShareSlackBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="font-size:11px; display:none;">📢 Share to Slack Channel</button>
         </div>
       </div>
 
@@ -1023,7 +1205,7 @@
     getEl('jitsiToggleRecordBtn').onclick = handleToggleRecord;
     getEl('jitsiTranscribeBtn').onclick = async () => {
       UI.switchTab('notes');
-      await executeParallelTranscription();
+      await executeParallelTranscription({ forceRetry: true });
       await executeDriveUpload({ isAuto: true });
     };
     getEl('jitsiUploadBtn').onclick = () => executeDriveUpload({ isAuto: false });
@@ -1054,8 +1236,70 @@
       };
     }
 
+    const saveSlackBtn = getEl('jitsiSaveSlackBtn');
+    if (saveSlackBtn) {
+      saveSlackBtn.onclick = () => {
+        const urlInput = getEl('jitsiSlackWebhookInput');
+        const autoCheck = getEl('jitsiSlackAutoShareCheck');
+        savedSlackWebhookUrl = (urlInput?.value || '').trim();
+        savedSlackAutoShare = Boolean(autoCheck?.checked);
+        saveSettings();
+        updateSlackUI();
+        showToast('💾 Slack settings saved!');
+      };
+    }
+
+    const testSlackBtn = getEl('jitsiTestSlackBtn');
+    if (testSlackBtn) {
+      testSlackBtn.onclick = async () => {
+        const urlInput = getEl('jitsiSlackWebhookInput');
+        const url = (urlInput?.value || savedSlackWebhookUrl || '').trim();
+        if (!url || !url.startsWith('https://hooks.slack.com/')) {
+          showToast('Enter a valid Slack Webhook URL (https://hooks.slack.com/...)', true);
+          return;
+        }
+        testSlackBtn.disabled = true;
+        testSlackBtn.textContent = 'Sending...';
+        try {
+          await new Promise((resolve, reject) => {
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+              const activeAcc = (typeof accounts !== 'undefined' && accounts && accounts[activeAccIdx]) || {};
+              const testFolderUrl = lastUploadedFolderUrl || `https://drive.google.com/drive/search?q=${encodeURIComponent(activeAcc.folderName || 'meetingRecords')}`;
+              chrome.runtime.sendMessage({
+                action: 'SLACK_SEND_NOTIFICATION',
+                webhookUrl: url,
+                roomName: 'Test Meeting',
+                folderUrl: testFolderUrl,
+                decisions: ['Slack webhook successfully connected to Meetings_AI Assistant.'],
+                actions: ['Verify that the Google Drive button and notes format properly in Slack.'],
+                durationStr: '00:00 test'
+              }, (res) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else if (res && res.success) resolve(res);
+                else reject(new Error(res?.error || 'Slack test failed'));
+              });
+            } else {
+              resolve({ success: true });
+            }
+          });
+          showToast('✅ Test message delivered to Slack!');
+          savedSlackWebhookUrl = url;
+          saveSettings();
+          updateSlackUI();
+        } catch (e) {
+          showToast(`Slack test failed: ${e.message}`, true);
+        } finally {
+          testSlackBtn.disabled = false;
+          testSlackBtn.textContent = '🔔 Test Slack';
+        }
+      };
+    }
+
     const switchAccBtn = getEl('jitsiSwitchAccBtn');
     if (switchAccBtn) switchAccBtn.onclick = () => UI.switchTab('settings');
+
+    const saveAccBtn = getEl('jitsiSaveAccBtn');
+    if (saveAccBtn) saveAccBtn.onclick = saveActiveAccountDetails;
 
     const checkpointBtn = getEl('jitsiManualCheckpointBtn');
     if (checkpointBtn) {
@@ -1155,9 +1399,12 @@
       };
     }
 
-    getEl('jitsiSelectAcc0').onclick = () => selectAccount(0);
-    getEl('jitsiSelectAcc1').onclick = () => selectAccount(1);
-    getEl('jitsiSaveAccBtn').onclick = saveActiveAccountDetails;
+    const sel0 = getEl('jitsiSelectAcc0');
+    if (sel0) sel0.onclick = () => selectAccount(0);
+    const sel1 = getEl('jitsiSelectAcc1');
+    if (sel1) sel1.onclick = () => selectAccount(1);
+    const saveAccBtnBottom = getEl('jitsiSaveAccBtn');
+    if (saveAccBtnBottom) saveAccBtnBottom.onclick = saveActiveAccountDetails;
 
     updateAccountUI();
     updateAiKeyDisplay();
@@ -1182,7 +1429,7 @@
     const driveName = getEl('jitsiDriveAccName');
     const driveEmail = getEl('jitsiDriveEmailDisplay');
     if (driveName) driveName.textContent = currentAcc.name || `Account ${activeAccIdx + 1}`;
-    if (driveEmail) driveEmail.textContent = `Folder: ${currentAcc.folderName || 'Jitsi_Meetings'}`;
+    if (driveEmail) driveEmail.textContent = `Folder: ${currentAcc.folderName || 'meetingRecords'}`;
 
     const webInput = getEl('jitsiAccWebhookInput');
     const tokenInput = getEl('jitsiAccTokenInput');
@@ -1191,7 +1438,7 @@
 
     if (webInput) webInput.value = currentAcc.webhookUrl || '';
     if (tokenInput) tokenInput.value = currentAcc.token || '';
-    if (folderInput) folderInput.value = currentAcc.folderName || 'Jitsi_Meetings';
+    if (folderInput) folderInput.value = currentAcc.folderName || 'meetingRecords';
     if (geminiInput) geminiInput.value = geminiApiKey || '';
 
     const durBadge = getEl('jitsiChunkDurationBadge');
@@ -1215,12 +1462,27 @@
 
   function saveActiveAccountDetails() {
     const webInput = getEl('jitsiAccWebhookInput');
+    const tokenInput = getEl('jitsiAccTokenInput');
     const folderInput = getEl('jitsiAccFolderInput');
+    const saveBtn = getEl('jitsiSaveAccBtn');
+
     if (accounts[activeAccIdx]) {
-      accounts[activeAccIdx].webhookUrl = (webInput ? webInput.value : '').trim();
-      accounts[activeAccIdx].folderName = (folderInput ? folderInput.value : '').trim() || 'Jitsi_Meetings';
+      if (webInput) accounts[activeAccIdx].webhookUrl = (webInput.value || '').trim();
+      if (tokenInput) accounts[activeAccIdx].token = (tokenInput.value || '').trim();
+      if (folderInput) accounts[activeAccIdx].folderName = (folderInput.value || '').trim() || 'meetingRecords';
       saveSettings();
-      showToast(`Saved settings for ${accounts[activeAccIdx].name}`);
+      updateAccountUI();
+
+      if (saveBtn) {
+        const origText = saveBtn.textContent;
+        saveBtn.textContent = '✅ Settings Saved!';
+        saveBtn.style.backgroundColor = '#10b981';
+        setTimeout(() => {
+          saveBtn.textContent = origText;
+          saveBtn.style.backgroundColor = '';
+        }, 1800);
+      }
+      showToast(`✅ Saved settings for ${accounts[activeAccIdx].name}!`);
     }
   }
 

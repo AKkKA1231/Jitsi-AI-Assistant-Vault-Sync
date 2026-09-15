@@ -166,7 +166,7 @@ export class AiNotesService {
     }
     markdown += `\n`;
 
-    markdown += `---\n*Generated automatically by Jitsi AI Assistant Plugin with Google Drive Sync.*`;
+    markdown += `---\n*Generated automatically by Meetings_AI Assistant Plugin with Google Drive Sync.*`;
     return markdown;
   }
 

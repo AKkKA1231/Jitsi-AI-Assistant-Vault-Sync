@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Jitsi AI Assistant & Vault Sync — Colleague Setup Guide</title>
+  <title>Meetings_AI Assistant & Vault Sync — Colleague Setup Guide</title>
   <style>
     :root {
       --primary: #4f46e5;
@@ -208,7 +208,7 @@
 <body>
   <div class="container">
     <span class="badge">Team Onboarding Guide</span>
-    <h1>🎙️ Jitsi AI Assistant & Vault Sync</h1>
+    <h1>🎙️ Meetings_AI Assistant & Vault Sync</h1>
     <p class="subtitle">Run your own meeting copilot in Chrome, Edge, or Brave in under 3 minutes.</p>
 
     <!-- STEP 1 -->
@@ -245,7 +245,7 @@
         <li>Select the <code>extension/</code> folder.</li>
       </ol>
       <div class="callout">
-        ✅ <strong>Done!</strong> You will see the <strong>"Jitsi AI Assistant & Vault Sync"</strong> card appear in your extensions list.
+        ✅ <strong>Done!</strong> You will see the <strong>"Meetings_AI Assistant"</strong> card appear in your extensions list.
       </div>
     </div>
 
@@ -287,11 +287,14 @@
     }
     
     if (!subFolder) {
-      var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
-      var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+      var mainFolder = DriveApp.getFoldersByName(data.folderName || "meetingRecords");
+      var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "meetingRecords");
       var room = data.roomName || "Meeting";
       var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
-      subFolder = parentFolder.createFolder(room + "_" + dateStr);
+      var subFolder = parentFolder.createFolder(room + "_" + dateStr);
+      try {
+        subFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (shareErr) {}
     }
     
     // 1. Save Meeting Summary & Action Items (.md) if provided

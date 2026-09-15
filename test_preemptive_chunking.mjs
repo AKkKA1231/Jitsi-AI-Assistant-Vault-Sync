@@ -196,6 +196,105 @@ console.log('\n--- Test Group 5: WebM Container Header Extraction & Standalone B
   console.log('  ✅ PASS: Block #2 successfully prepended with EBML container header');
 }
 
+// --- Test 6: Web Speech Live STT Fallback on Gemini Offline/503 ---
+console.log('\n--- Test Group 6: Web Speech Live STT Fallback on Gemini Offline/503 ---');
+{
+  const mockBlockWithFailure = {
+    index: 1,
+    startSec: 0,
+    endSec: 300,
+    startTime: '00:00',
+    endTime: '05:00',
+    blob: new Blob(['fake-audio-simulated-503-payload'], { type: 'audio/webm' }),
+    sizeKb: '1083.1'
+  };
+
+  const mockLiveTranscripts = [
+    { time: '00:15', elapsedSec: 15, text: 'We agreed to launch the updated production system on Monday.' },
+    { time: '02:40', elapsedSec: 160, text: 'Akhtar will prepare the deployment documentation.' }
+  ];
+
+  // Simulating Chrome extension runtime returning 503 error
+  globalThis.chrome = {
+    runtime: {
+      sendMessage: (msg, callback) => {
+        callback({ success: false, error: 'Model gemini-2.0-flash returned (503): No capacity available for model' });
+      }
+    }
+  };
+
+  const resultWithFallback = await JitsiTranscriberModule.transcribeSingleBlock(mockBlockWithFailure, {
+    apiKey: 'mock-key',
+    roomName: 'IncidentCall',
+    liveTranscripts: mockLiveTranscripts
+  });
+
+  assert.strictEqual(resultWithFallback.isFallback, true, 'Result should be marked as fallback');
+  assert.strictEqual(resultWithFallback.source, 'webspeech', 'Fallback source should be webspeech');
+  assert.strictEqual(resultWithFallback.isFailed, false, 'Should not be marked as permanently failed');
+  assert(resultWithFallback.transcript.includes('launch the updated production system'), 'Must contain spoken text from live transcript');
+  assert(resultWithFallback.transcript.includes('Akhtar will prepare'), 'Must contain second spoken utterance');
+  console.log('  ✅ PASS: Time-spliced Web Speech fallback seamlessly restored speech text during 503 outage');
+
+  // Fast compilation test with fallback speech text
+  const compiledHybrid = await JitsiTranscriberModule.compilePreemptivelyTranscribedMeeting({
+    blocks: [mockBlockWithFailure],
+    precomputedTranscripts: { 1: resultWithFallback },
+    apiKey: 'mock-key',
+    roomName: 'IncidentCall',
+    liveTranscripts: mockLiveTranscripts
+  });
+
+  assert(compiledHybrid.decisions.length > 0, 'Must extract decisions from recovered speech');
+  assert(compiledHybrid.actions.length > 0, 'Must extract actions from recovered speech');
+  assert(compiledHybrid.markdown.includes('launch the updated production system'), 'Final notes must contain real speech');
+  console.log('  ✅ PASS: Executive synthesis extracts real decisions/actions from hybrid fallback transcript');
+
+  // Clean up mock
+  delete globalThis.chrome;
+}
+
+// --- Test 7: Cache Invalidation & Force Retry on Transcribe Call ---
+console.log('\n--- Test Group 7: Cache Invalidation & Force Retry on Transcribe Call ---');
+{
+  const failedBlock = {
+    index: 1,
+    startSec: 0,
+    endSec: 300,
+    startTime: '00:00',
+    endTime: '05:00',
+    blob: new Blob(['fake-audio-payload'], { type: 'audio/webm' }),
+    sizeKb: '1083.1'
+  };
+
+  const precomputedWithPlaceholder = {
+    1: {
+      index: 1,
+      startTime: '00:00',
+      endTime: '05:00',
+      transcript: '[No speech detected in this interval (1083.1 KB)]',
+      isFailed: true
+    }
+  };
+
+  const liveSpeech = [
+    { time: '01:10', elapsedSec: 70, text: 'Confirming the budget is approved for next quarter.' }
+  ];
+
+  // With forceRetry: true, the compiler should actively re-process block #1 instead of serving the failed placeholder
+  const recompiled = await JitsiTranscriberModule.compilePreemptivelyTranscribedMeeting({
+    blocks: [failedBlock],
+    precomputedTranscripts: precomputedWithPlaceholder,
+    apiKey: '',
+    roomName: 'BudgetReview',
+    liveTranscripts: liveSpeech,
+    forceRetry: true
+  });
+
+  assert(recompiled.transcriptText.includes('budget is approved'), 'Force retry must replace placeholder with speech');
+  console.log('  ✅ PASS: Force retry successfully invalidates failed placeholder and recovers speech text');
+}
+
 console.log('\n======================================================');
 console.log('🎉 ALL PREEMPTIVE 3-6 MINUTE CHUNKING & COMPILATION TESTS PASSED!');
 console.log('======================================================\n');

@@ -34,7 +34,7 @@ export class GoogleDriveService {
           name: 'Account 1 (Primary Drive)',
           clientId: 'drive-primary@gmail.com',
           clientSecret: '••••••••••••••••',
-          folderName: 'Jitsi_Meetings',
+          folderName: 'meetingRecords',
           quotaGb: 15.0,
           usedBytes: 850 * 1024 * 1024 // 850 MB used
         },
@@ -43,7 +43,7 @@ export class GoogleDriveService {
           name: 'Account 2 (Backup Drive)',
           clientId: 'drive-backup2@gmail.com',
           clientSecret: '••••••••••••••••',
-          folderName: 'Jitsi_Meetings_Backup',
+          folderName: 'meetingRecords_Backup',
           quotaGb: 15.0,
           usedBytes: 120 * 1024 * 1024 // 120 MB used
         }
@@ -106,7 +106,7 @@ export class GoogleDriveService {
       name: accountData.name || `Account ${this.accounts.length + 1}`,
       clientId: accountData.clientId || '',
       clientSecret: accountData.clientSecret || '',
-      folderName: accountData.folderName || 'Jitsi_Meetings',
+      folderName: accountData.folderName || 'meetingRecords',
       quotaGb: Number(accountData.quotaGb) || 15.0,
       usedBytes: 0
     };

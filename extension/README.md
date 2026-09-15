@@ -15,7 +15,7 @@ This browser extension allows you to use the AI Assistant and Google Drive sync 
    ```
    C:\Users\ADMIN\.gemini\antigravity-ide\scratch\jitsi-ai-assistant\extension
    ```
-5. Done! The **Jitsi AI Assistant & Google Drive Sync** extension is now installed.
+5. Done! The **Meetings_AI Assistant** extension is now installed.
 
 ---
 

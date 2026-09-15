@@ -60,25 +60,52 @@
   }
 
   /**
-   * Preemptively transcribes a single 3-6 minute audio block in background
+   * Helper to extract real-time speech recorded by browser Web Speech API
+   * within a specific audio block's time slice.
    */
-  async function transcribeSingleBlock(block, { apiKey, roomName }) {
-    if (!block || !block.blob) {
-      return { index: block ? block.index : 0, transcript: '' };
+  function extractSpeechFromLiveLog(block, liveTranscripts = []) {
+    if (!Array.isArray(liveTranscripts) || liveTranscripts.length === 0) return '';
+    const blockStart = typeof block.startSec === 'number' ? block.startSec : 0;
+    const blockEnd = typeof block.endSec === 'number' ? block.endSec : (blockStart + (block.durationSec || 300));
+
+    const matched = liveTranscripts.filter(item => {
+      if (typeof item.elapsedSec === 'number') {
+        return item.elapsedSec >= (blockStart - 4) && item.elapsedSec <= (blockEnd + 4);
+      }
+      return true;
+    });
+
+    if (matched.length > 0) {
+      return matched.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
     }
 
+    if (liveTranscripts.length > 0 && block.index === 1) {
+      return liveTranscripts.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
+    }
+
+    return '';
+  }
+
+  /**
+   * Preemptively transcribes a single 3-6 minute audio block in background
+   */
+  async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [] } = {}) {
     if (!block || !block.blob) {
-      return { index: block?.index || 1, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '' };
+      return { index: block ? block.index : 0, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '', isFailed: true };
     }
 
     // Ignore tiny silence / partial stubs (< 1.5 KB) to avoid Google audio demuxer errors
     if (block.blob.size < 1500) {
+      const liveSpeech = extractSpeechFromLiveLog(block, liveTranscripts);
       return {
         index: block.index,
         startTime: block.startTime,
         endTime: block.endTime,
         durationSec: block.durationSec,
-        transcript: ''
+        transcript: liveSpeech || '',
+        isFallback: Boolean(liveSpeech),
+        isFailed: false,
+        source: liveSpeech ? 'webspeech' : 'empty'
       };
     }
 
@@ -117,7 +144,10 @@
           startTime: block.startTime,
           endTime: block.endTime,
           durationSec: block.durationSec,
-          transcript: result.transcript || ''
+          transcript: result.transcript || '',
+          isFallback: false,
+          isFailed: false,
+          source: 'gemini'
         };
       } catch (err) {
         if (attempt < maxRetries) {
@@ -125,13 +155,33 @@
           await new Promise(r => setTimeout(r, 1500));
           continue;
         }
-        console.log(`[Transcriber] Preemptive transcription deferred on Block #${block.index} (will compile at meeting end): ${err.message || err}`);
+
+        // Seamless zero-loss fallback to real-time Web Speech STT captured during meeting
+        const liveFallback = extractSpeechFromLiveLog(block, liveTranscripts);
+        if (liveFallback && liveFallback.trim().length > 0) {
+          console.log(`[Transcriber] Seamlessly recovered Block #${block.index} speech via local Web Speech STT fallback!`);
+          return {
+            index: block.index,
+            startTime: block.startTime,
+            endTime: block.endTime,
+            durationSec: block.durationSec,
+            transcript: liveFallback,
+            isFallback: true,
+            isFailed: false,
+            source: 'webspeech'
+          };
+        }
+
+        console.log(`[Transcriber] Preemptive transcription deferred on Block #${block.index}: ${err.message || err}`);
         return {
           index: block.index,
           startTime: block.startTime,
           endTime: block.endTime,
           durationSec: block.durationSec,
-          transcript: `[Spoken segment ${block.startTime}-${block.endTime} captured (${block.sizeKb || 'audio'} KB)]`
+          transcript: `[No speech detected in this interval (${block.sizeKb || 'audio'} KB)]`,
+          isFallback: true,
+          isFailed: true,
+          source: 'none'
         };
       }
     }
@@ -141,7 +191,16 @@
    * Fast-path meeting compiler:
    * Merges all precomputed background transcripts and transcribes only remaining pending blocks.
    */
-  async function compilePreemptivelyTranscribedMeeting({ blocks, precomputedTranscripts = {}, apiKey, roomName, onProgress }) {
+  async function compilePreemptivelyTranscribedMeeting({
+    blocks,
+    precomputedTranscripts = {},
+    apiKey,
+    roomName,
+    liveTranscripts = [],
+    unifiedAudioBlob = null,
+    forceRetry = false,
+    onProgress
+  } = {}) {
     if (!blocks || blocks.length === 0) {
       return { verbatimTranscript: '', decisions: [], actions: [], summaryText: '', markdown: '' };
     }
@@ -149,12 +208,18 @@
     const total = blocks.length;
     console.log(`[Transcriber] Fast-compiling ${total} meeting blocks (${Object.keys(precomputedTranscripts).length} pre-transcribed in background)...`);
 
-    // 1. Identify any uncompleted blocks (usually just the final partial block)
-    const pendingBlocks = blocks.filter(b => !precomputedTranscripts[b.index]);
+    // 1. Identify uncompleted or previously failed blocks (retry if forced or failed)
+    const pendingBlocks = blocks.filter(b => {
+      const existing = precomputedTranscripts[b.index];
+      if (!existing) return true;
+      if (forceRetry && existing.isFailed) return true;
+      return false;
+    });
+
     if (pendingBlocks.length > 0) {
-      if (onProgress) onProgress(20, `Transcribing final partial meeting block (${pendingBlocks[0].startTime}-${pendingBlocks[0].endTime})...`);
+      if (onProgress) onProgress(20, `Transcribing ${pendingBlocks.length} pending meeting block(s)...`);
       await runConcurrentPool(pendingBlocks, 2, async (block) => {
-        const res = await transcribeSingleBlock(block, { apiKey, roomName });
+        const res = await transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts });
         precomputedTranscripts[block.index] = res;
       });
     }
@@ -164,7 +229,7 @@
       index: b.index,
       startTime: b.startTime,
       endTime: b.endTime,
-      transcript: 'No speech detected.'
+      transcript: extractSpeechFromLiveLog(b, liveTranscripts) || 'No active speech detected in this interval.'
     });
 
     orderedResults.sort((a, b) => a.index - b.index);
@@ -174,6 +239,14 @@
       combinedTranscript += `### ⏱️ [${cr.startTime} - ${cr.endTime}] Meeting Block #${cr.index}\n\n`;
       combinedTranscript += `${cr.transcript || 'No active speech detected in this interval.'}\n\n`;
     });
+
+    // If block-level transcripts produced negligible speech, incorporate the full live Web Speech log
+    const hasDialogue = orderedResults.some(r => r.transcript && !r.transcript.includes('[No speech') && !r.transcript.includes('[Spoken segment') && r.transcript.trim().length > 10);
+    if (!hasDialogue && Array.isArray(liveTranscripts) && liveTranscripts.length > 0) {
+      console.log('[Transcriber] Incorporating full browser Live STT log into meeting transcript...');
+      combinedTranscript = `### ⏱️ Spoken Dialogue (Captured Speech Engine)\n\n` +
+        liveTranscripts.map(t => `[${t.time || '00:00'}] ${t.text}`).join('\n') + `\n\n` + combinedTranscript;
+    }
 
     // 3. Fast Executive Synthesis Phase: Extract Decisions & Action Items with Gemini Flash
     if (onProgress) onProgress(70, `Synthesizing final executive minutes and action items with Gemini Flash...`);

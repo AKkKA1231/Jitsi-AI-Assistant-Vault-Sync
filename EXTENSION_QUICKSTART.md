@@ -1,10 +1,10 @@
-# 🚀 Jitsi AI Assistant Vault & Sync: Colleague Quickstart Guide
+# 🚀 Meetings_AI Assistant Vault & Sync: Colleague Quickstart Guide
 **A Simple Step-by-Step Guide to Run the AI Assistant Plugin in Your Browser**
 
 ---
 
 ### 📌 What is This?
-**Jitsi AI Assistant Vault & Sync** is a browser extension for **Jitsi Meet** calls (`meet.jit.si`). It automatically:
+**Meetings_AI Assistant Vault & Sync** is a browser extension for conference calls. It automatically:
 1. **Records multi-speaker call audio** (both you and all other meeting participants).
 2. **Protects against lost recordings** using a local browser vault (even if your Wi-Fi dies or laptop sleeps).
 3. **Transcribes audio & extracts action items** using Google Gemini Flash AI.
@@ -31,7 +31,7 @@
 2. Turn **ON** the **"Developer mode"** toggle (usually in the top-right corner).
 3. Click the **"Load unpacked"** button (top-left).
 4. Select the **`extension/`** folder from the files you extracted.
-5. Done! You will see **"Jitsi AI Assistant & Google Drive Sync"** in your extensions list.
+5. Done! You will see **"Meetings_AI Assistant"** in your extensions list.
 6. *(Tip)* Click the **puzzle piece (🧩)** icon in your browser toolbar and click the **Pin** icon next to the extension.
 
 ---

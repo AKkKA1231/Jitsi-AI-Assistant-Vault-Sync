@@ -1,4 +1,4 @@
-# Jitsi AI Assistant & Google Drive Sync (Free Account Plugin)
+# Meetings_AI Assistant & Google Drive Sync (Free Account Plugin)
 
 A turnkey, zero-cost solution for **Jitsi Meet** calls featuring:
 1. **Real-time Speech-to-Text (STT)**: Continuous streaming transcription directly inside the browser using Web Speech API — works 100% free with any `meet.jit.si` room without requiring Jigasi telephony or paid 8x8 JaaS tokens.

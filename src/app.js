@@ -227,7 +227,7 @@ class App {
         this.stt.setSpeaker(user);
         this.jitsi.joinRoom(room, user);
         document.getElementById('targetFolderPath').textContent =
-          `📁 Jitsi_Meetings / ${new Date().toISOString().slice(0, 10)}_${room}`;
+          `📁 meetingRecords / ${new Date().toISOString().slice(0, 10)}_${room}`;
       }
     });
 
@@ -608,7 +608,7 @@ class App {
     this.dom.accountLabelInput.value = acc.name || '';
     this.dom.clientIdInput.value = acc.clientId || '';
     this.dom.clientSecretInput.value = acc.clientSecret || '';
-    this.dom.driveFolderInput.value = acc.folderName || 'Jitsi_Meetings';
+    this.dom.driveFolderInput.value = acc.folderName || 'meetingRecords';
     this.dom.storageLimitInput.value = String(acc.quotaGb || 15);
 
     const stats = this.drive.getStorageStats(acc.id);

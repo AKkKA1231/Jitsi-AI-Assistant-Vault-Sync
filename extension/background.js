@@ -33,6 +33,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
     return true; // Keep message channel open for async response
   }
+
+  if (request.action === 'SLACK_SEND_NOTIFICATION') {
+    handleSlackNotification(request)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
+    return true;
+  }
 });
 
 // 2. Persistent streaming port listener to bypass Chrome's 64MiB IPC limit
@@ -94,7 +101,7 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
 
   // Streamline payload to avoid memory bloat
   const cleanPayload = {
-    folderName: payload.folderName || 'Jitsi_Meetings',
+    folderName: payload.folderName || 'meetingRecords',
     roomName: payload.roomName || 'Meeting',
     targetFolderId: payload.targetFolderId || '',
     audioFileName: payload.audioFileName || 'Meeting_Audio.webm',
@@ -143,6 +150,8 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
     throw new Error(`Google Apps Script returned HTTP ${res.status}${text ? ': ' + text.slice(0, 100) : ''}`);
   }
 
+  const defaultFolderUrl = `https://drive.google.com/drive/search?q=${encodeURIComponent(payload?.folderName || 'meetingRecords')}`;
+
   let json;
   try {
     json = JSON.parse(text);
@@ -150,7 +159,7 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
     if (text && (text.includes('drive.google.com') || text.toLowerCase().includes('success'))) {
       return {
         success: true,
-        folderUrl: text.includes('drive.google.com') ? text.trim() : 'https://drive.google.com/drive/my-drive',
+        folderUrl: text.includes('drive.google.com') ? text.trim() : defaultFolderUrl,
         raw: text
       };
     }
@@ -174,7 +183,7 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
     return {
       success: true,
       folderId: json.folderId || json.folder_id || json.id || '',
-      folderUrl: json.folderUrl || json.folder_url || json.url || (json.folderId ? `https://drive.google.com/drive/folders/${json.folderId}` : 'https://drive.google.com/drive/my-drive'),
+      folderUrl: json.folderUrl || json.folder_url || json.url || (json.folderId ? `https://drive.google.com/drive/folders/${json.folderId}` : defaultFolderUrl),
       notesUrl: json.notesUrl || json.notes_url || json.fileUrl || json.file_url || null,
       audioUrl: json.audioUrl || json.audio_url || null,
       raw: json
@@ -195,21 +204,139 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
   throw new Error(detailedError);
 }
 
+/**
+ * Dispatches a formatted Block Kit notification with Google Drive link and AI notes to Slack Webhook
+ */
+async function handleSlackNotification({
+  webhookUrl,
+  roomName,
+  folderUrl,
+  notesUrl,
+  audioUrl,
+  decisions = [],
+  actions = [],
+  executiveSummary = '',
+  durationStr = '',
+  audioSizeKb = ''
+}) {
+  console.log('[Background Service Worker] Dispatching notification to Slack Webhook...');
+  const cleanUrl = (webhookUrl || '').trim();
+  if (!cleanUrl || !cleanUrl.startsWith('https://hooks.slack.com/')) {
+    throw new Error('Invalid Slack Webhook URL. It must start with https://hooks.slack.com/');
+  }
+
+  const room = roomName || 'Meeting';
+  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const targetFolderUrl = folderUrl || 'https://drive.google.com/drive/search?q=meetingRecords';
+
+  // Construct Block Kit message blocks
+  const blocks = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: `🎙️ Meeting Notes: ${room}`,
+        emoji: true
+      }
+    },
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `📅 *${dateStr} at ${timeStr}* | ⏱️ Duration: *${durationStr || 'Completed'}* ${audioSizeKb ? `| 🎵 Audio: *${audioSizeKb} KB*` : ''}`
+        }
+      ]
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Google Drive Meeting Folder:*\n<${targetFolderUrl}|📂 View All Meeting Files in Google Drive>`
+      },
+      accessory: {
+        type: 'button',
+        text: {
+          type: 'plain_text',
+          text: '📂 Open in Drive',
+          emoji: true
+        },
+        url: targetFolderUrl,
+        style: 'primary',
+        action_id: 'open_drive_folder'
+      }
+    },
+    {
+      type: 'divider'
+    }
+  ];
+
+  if (executiveSummary && executiveSummary.trim()) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*📌 Executive Summary:*\n${executiveSummary.trim().slice(0, 500)}`
+      }
+    });
+  }
+
+  if (Array.isArray(decisions) && decisions.length > 0) {
+    const decisionList = decisions.slice(0, 6).map(d => `• ${d.replace(/^[\\*\\-\\s]+/, '')}`).join('\n');
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*🎯 Key Decisions:*\n${decisionList}`
+      }
+    });
+  }
+
+  if (Array.isArray(actions) && actions.length > 0) {
+    const actionList = actions.slice(0, 6).map(a => `☐ ${a.replace(/^[\\*\\-\\s\\[\\]x]+/, '')}`).join('\n');
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*✅ Action Items:*\n${actionList}`
+      }
+    });
+  }
+
+  const payload = {
+    text: `🎙️ Meeting Notes for ${room}: <${targetFolderUrl}|View in Google Drive>`,
+    blocks
+  };
+
+  const response = await fetch(cleanUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => '');
+    throw new Error(`Slack Webhook returned HTTP ${response.status}: ${errBody || response.statusText}`);
+  }
+
+  return { success: true, timestamp: Date.now() };
+}
+
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
-// Active production models from Google (verified endpoints)
+// Active production models from Google (verified endpoints with audio multimodal support)
 const ACTIVE_GEMINI_MODELS = [
   'gemini-2.0-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-2.0-flash-lite'
+  'gemini-1.5-pro'
 ];
 
 // Compatibility cascade for tests & fallbacks
 const GEMINI_MODELS = [
   'gemini-2.0-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro',
   'gemini-2.0-flash-lite',
   'gemini-3.6-flash',
   'gemini-flash-latest',
@@ -227,8 +354,9 @@ async function fetchWithBackoff(url, options, maxRetries = 3) {
                           response.status === 429;
 
       if (isTransient && attempt < maxRetries) {
-        const delay = Math.min(6000, 1200 * Math.pow(1.8, attempt)); // ~1.2s, ~2.1s, ~3.8s
-        console.warn(`[Gemini Background] HTTP ${response.status} (Transient Error) on attempt ${attempt + 1}/${maxRetries}. Retrying in ${Math.round(delay)}ms...`);
+        const jitter = Math.floor(Math.random() * 600);
+        const delay = Math.min(8000, 1200 * Math.pow(1.8, attempt) + jitter); // ~1.2s + jitter, ~2.1s + jitter, ~3.8s + jitter
+        console.warn(`[Gemini Background] HTTP ${response.status} (Transient Error: ${response.statusText || 'Overloaded'}). Retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})...`);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }

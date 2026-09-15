@@ -1,7 +1,7 @@
 # ☁️ Google Drive Sync Setup Guide
-**Jitsi AI Assistant Vault & Sync**
+**Meetings_AI Assistant Vault & Sync**
 
-This guide explains how to connect your personal or work Google Drive account to the Jitsi AI Assistant extension so all call recordings (`.webm`) and meeting notes (`.md`) upload automatically to your Google Drive.
+This guide explains how to connect your personal or work Google Drive account to the Meetings_AI Assistant extension so all call recordings (`.webm`) and meeting notes (`.md`) upload automatically to your Google Drive.
 
 ---
 
@@ -18,12 +18,12 @@ This guide explains how to connect your personal or work Google Drive account to
 
 ```javascript
 /**
- * Jitsi AI Assistant - Personal Google Drive Sync Webhook
+ * Meetings_AI Assistant - Personal Google Drive Sync Webhook
  */
 function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
-    var mainFolderName = data.folderName || "Jitsi_Meetings";
+    var mainFolderName = data.folderName || "meetingRecords";
     
     var meetingFolder;
     if (data.targetFolderId) {
@@ -41,6 +41,11 @@ function doPost(e) {
       var room = data.roomName || "Meeting";
       var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
       meetingFolder = mainFolder.createFolder(room + "_" + dateStr);
+
+      // Ensure ONLY this meeting folder is viewable to attendees via link (keeps personal Drive private)
+      try {
+        meetingFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      } catch (shareErr) {}
     }
 
     // 3. Save Meeting Notes & Action Items (.md) if provided
@@ -109,7 +114,7 @@ function doGet(e) {
 3. Paste the URL into the **Google Apps Script Webhook URL** field.
 4. Click **💾 Save Account**. You will see: `✓ Connected via Google Apps Script Webhook`.
 
-Now whenever you click **Transcribe Call** or **Upload to Drive**, files upload automatically directly into your personal `Jitsi_Meetings` folder on Google Drive!
+Now whenever you click **Transcribe Call** or **Upload to Drive**, files upload automatically directly into your personal `meetingRecords` folder on Google Drive!
 
 ---
 

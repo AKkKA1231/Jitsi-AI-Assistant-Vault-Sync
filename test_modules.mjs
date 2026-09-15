@@ -320,7 +320,7 @@ await itAsync('Should verify real Google Drive uploader module supporting Webhoo
   // Test unconfigured credentials handling
   const unconfiguredResult = await uploader.uploadPackage({
     credentials: { webhookUrl: '', token: '' },
-    folderName: 'Jitsi_Meetings',
+    folderName: 'meetingRecords',
     audioBlob: null,
     markdownText: '# Test'
   });

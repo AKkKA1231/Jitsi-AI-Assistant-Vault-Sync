@@ -55,10 +55,10 @@ async function runE2ETests() {
     await page.goto('http://localhost:3000', { waitUntil: 'networkidle' });
 
     const title = await page.title();
-    report('Page Title Loaded', title.includes('Jitsi AI Assistant'), `(Title: "${title}")`);
+    report('Page Title Loaded', title.includes('Meetings_AI Assistant') || title.includes('Jitsi AI Assistant'), `(Title: "${title}")`);
 
     const brandText = await page.locator('.brand-text h1').textContent();
-    report('Brand Header', brandText.includes('Jitsi'), `(Found: "${brandText}")`);
+    report('Brand Header', brandText.includes('Meetings_AI') || brandText.includes('Jitsi'), `(Found: "${brandText}")`);
 
     const driveChipText = await page.locator('#activeAccountLabel').textContent();
     report('Google Drive Status Chip', driveChipText.includes('Account 1'), `(Label: "${driveChipText}")`);
@@ -82,7 +82,7 @@ async function runE2ETests() {
     await page.click('button[data-tab="tab-uploads"]');
     const uploadsTabActive = await page.locator('#tab-uploads').evaluate(el => el.classList.contains('active'));
     const folderPath = await page.locator('#targetFolderPath').textContent();
-    report('Switch to Uploads Tab', uploadsTabActive && folderPath.includes('Jitsi_Meetings'), `(Target: "${folderPath}")`);
+    report('Switch to Uploads Tab', uploadsTabActive && folderPath.includes('meetingRecords'), `(Target: "${folderPath}")`);
 
     // Switch back to AI Notes Tab
     await page.click('button[data-tab="tab-live-notes"]');

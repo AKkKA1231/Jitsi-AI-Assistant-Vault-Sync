@@ -1,6 +1,6 @@
-# 🎙️ Jitsi AI Assistant & Drive Sync — Colleague Setup Guide
+# 🎙️ Meetings_AI Assistant & Drive Sync — Colleague Setup Guide
 
-Welcome to the **Jitsi AI Assistant & Vault Sync** browser plugin! This guide will help you install and run the extension in **Chrome, Edge, or Brave** in less than 3 minutes.
+Welcome to the **Meetings_AI Assistant & Vault Sync** browser plugin! This guide will help you install and run the extension in **Chrome, Edge, or Brave** in less than 3 minutes.
 
 ---
 
@@ -37,7 +37,7 @@ You can use **Google Chrome**, **Microsoft Edge**, or **Brave**:
 2. In the top-right corner, turn **ON** **"Developer mode"** (toggle switch).
 3. Click the **"Load unpacked"** button in the top-left corner.
 4. Select the `extension/` folder from the project directory.
-5. 🎉 **Done!** You will now see **"Jitsi AI Assistant & Vault Sync"** in your list of extensions.
+5. 🎉 **Done!** You will now see **"Meetings_AI Assistant"** in your list of extensions.
 
 ---
 
@@ -69,12 +69,15 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
        }
        
        if (!subFolder) {
-         var mainFolder = DriveApp.getFoldersByName(data.folderName || "Jitsi_Meetings");
-         var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "Jitsi_Meetings");
+          var mainFolder = DriveApp.getFoldersByName(data.folderName || "meetingRecords");
+          var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "meetingRecords");
          var room = data.roomName || "Meeting";
          var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
-         subFolder = parentFolder.createFolder(room + "_" + dateStr);
-       }
+          subFolder = parentFolder.createFolder(room + "_" + dateStr);
+          try {
+            subFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+          } catch (shareErr) {}
+        }
        
        // 1. Save Meeting Summary & Action Items (.md) if provided
        var mdUrl = null;

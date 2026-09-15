@@ -303,7 +303,27 @@
         throw new Error(`Google Apps Script returned HTTP ${res.status}`);
       }
 
-      json = await res.json();
+      if (typeof res.json === 'function') {
+        try {
+          json = await res.json();
+        } catch (e) {}
+      }
+      if (!json && typeof res.text === 'function') {
+        const text = await res.text().catch(() => '');
+        try {
+          json = JSON.parse(text);
+        } catch (parseErr) {
+          if (text && (text.includes('drive.google.com') || text.toLowerCase().includes('success'))) {
+            json = {
+              success: true,
+              folderUrl: text.includes('drive.google.com') ? text.trim() : ''
+            };
+          } else {
+            throw new Error(`Invalid response from Apps Script: ${text ? text.slice(0, 150) : 'Empty response'}`);
+          }
+        }
+      }
+
       const isSuccessful =
         json && (
           json.success === true ||
@@ -318,23 +338,30 @@
 
       if (!isSuccessful) {
         const detailedError =
-          (typeof json.error === 'string' && json.error.trim()) ||
-          (json.error && typeof json.error === 'object' && (json.error.message || JSON.stringify(json.error))) ||
-          (typeof json.message === 'string' && json.message.trim()) ||
-          (typeof json.details === 'string' && json.details.trim()) ||
-          (typeof json.msg === 'string' && json.msg.trim()) ||
-          (typeof json.err === 'string' && json.err.trim()) ||
-          (json.status && json.status !== 'error' && json.status !== 'failed' ? `Status: ${json.status}` : null) ||
-          `Apps Script sync returned unsuccessful result (${JSON.stringify(json)})`;
+          (json && typeof json.error === 'string' && json.error.trim()) ||
+          (json && json.error && typeof json.error === 'object' && (json.error.message || JSON.stringify(json.error))) ||
+          (json && typeof json.message === 'string' && json.message.trim()) ||
+          (json && typeof json.details === 'string' && json.details.trim()) ||
+          (json && typeof json.msg === 'string' && json.msg.trim()) ||
+          (json && typeof json.err === 'string' && json.err.trim()) ||
+          (json && json.status && json.status !== 'error' && json.status !== 'failed' ? `Status: ${json.status}` : null) ||
+          (json ? `Apps Script sync returned unsuccessful result (${JSON.stringify(json)})` : 'Apps Script returned an empty response');
         throw new Error(detailedError);
       }
     }
 
+    if (!json) {
+      throw new Error('No response received from Google Apps Script sync.');
+    }
+
+    const folderId = json.folderId || json.folder_id || json.id || (payload && payload.targetFolderId) || '';
+    const cleanFolderUrl = json.folderUrl || json.folder_url || json.url || (folderId ? `https://drive.google.com/drive/folders/${folderId}` : `https://drive.google.com/drive/search?q=${encodeURIComponent((payload && payload.folderName) || 'meetingRecords')}`);
+
     return {
       success: true,
       mode: 'webhook',
-      folderId: json.folderId || json.folder_id || json.id || '',
-      folderUrl: json.folderUrl || json.folder_url || json.url || (json.folderId ? `https://drive.google.com/drive/folders/${json.folderId}` : 'https://drive.google.com/drive/my-drive'),
+      folderId: folderId,
+      folderUrl: cleanFolderUrl,
       audioUrl: json.audioUrl || json.audio_url || null,
       notesUrl: json.notesUrl || json.notes_url || json.fileUrl || json.file_url || null
     };
@@ -348,7 +375,7 @@
     if (syncMode === 'notes_only' || !audioBlob || audioBlob.size === 0) {
       onProgress(30, '⚡ Fast-syncing meeting notes to Google Drive (< 1s)...');
       const payload = {
-        folderName: folderName || 'Jitsi_Meetings',
+        folderName: folderName || 'meetingRecords',
         roomName: roomName || 'Meeting',
         audioFileName: '',
         audioBase64: '',
@@ -370,7 +397,7 @@
     if (isVeryLarge) {
       onProgress(25, `Step 1/2: Fast-syncing meeting notes to Google Drive...`);
       const notesPayload = {
-        folderName: folderName || 'Jitsi_Meetings',
+        folderName: folderName || 'meetingRecords',
         roomName: roomName || 'Meeting',
         audioFileName: '',
         audioBase64: '',
@@ -384,7 +411,7 @@
       try {
         const audioPayload = {
           targetFolderId: notesResult.folderId,
-          folderName: folderName || 'Jitsi_Meetings',
+          folderName: folderName || 'meetingRecords',
           roomName: roomName || 'Meeting',
           audioFileName: audioFileName || 'Meeting_Audio.webm',
           audioMimeType: audioBlob?.type || 'audio/webm',
@@ -412,7 +439,7 @@
     // Standard fast sync (< 15MB Base64) in single clean payload
     onProgress(40, `Transmitting package to Google Drive (~${audioSizeMb} MB)...`);
     const payload = {
-      folderName: folderName || 'Jitsi_Meetings',
+      folderName: folderName || 'meetingRecords',
       roomName: roomName || 'Meeting',
       audioFileName: audioFileName || 'Meeting_Audio.webm',
       audioMimeType: audioBlob?.type || 'audio/webm',
