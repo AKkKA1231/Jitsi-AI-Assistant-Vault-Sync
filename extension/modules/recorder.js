@@ -157,10 +157,10 @@
         recordedChunks.push(event.data);
         currentBlockChunks.push(event.data);
 
-        // Cache the WebM container header (EBML + Segment + Tracks) from the very first chunk
-        if (recordedChunks.length === 1 && !cachedWebmHeader) {
+        // Cache the WebM container header (EBML + Segment + Tracks) from the first few chunks
+        if (!cachedWebmHeader && recordedChunks.length <= 3) {
           extractWebmHeader(event.data).then((hdr) => {
-            if (hdr && hdr.size > 0) {
+            if (hdr && hdr.size > 0 && !cachedWebmHeader) {
               cachedWebmHeader = hdr;
             }
           }).catch((err) => {

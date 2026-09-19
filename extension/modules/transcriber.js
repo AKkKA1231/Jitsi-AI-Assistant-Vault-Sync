@@ -109,7 +109,7 @@
       };
     }
 
-    const maxRetries = 2;
+    const maxRetries = 1;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const base64Data = await blobToBase64(block.blob);
@@ -150,9 +150,12 @@
           source: 'gemini'
         };
       } catch (err) {
+        if (err.message && err.message.includes('Invalid Gemini API key')) {
+          break; // Fast-fail on invalid API key without delay
+        }
         if (attempt < maxRetries) {
-          console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1500ms (attempt ${attempt + 1}/${maxRetries})...`);
-          await new Promise(r => setTimeout(r, 1500));
+          console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1000ms (attempt ${attempt + 1}/${maxRetries})...`);
+          await new Promise(r => setTimeout(r, 1000));
           continue;
         }
 
@@ -172,14 +175,15 @@
           };
         }
 
-        console.log(`[Transcriber] Preemptive transcription deferred on Block #${block.index}: ${err.message || err}`);
+        console.log(`[Transcriber] Block #${block.index} transcription failed: ${err.message || err}`);
         return {
           index: block.index,
           startTime: block.startTime,
           endTime: block.endTime,
           durationSec: block.durationSec,
-          transcript: `[No speech detected in this interval (${block.sizeKb || 'audio'} KB)]`,
-          isFallback: true,
+          transcript: '',
+          error: err.message || 'Transcription failed',
+          isFallback: false,
           isFailed: true,
           source: 'none'
         };

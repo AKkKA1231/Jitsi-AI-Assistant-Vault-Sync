@@ -169,23 +169,64 @@
     }
   }
 
-  function updateBlockStatus(blockIndex, status, transcriptPreview = '') {
+  function updateBlockStatus(blockIndex, status, transcriptPreview = '', onRetry = null) {
     const statusEl = getEl(`block_status_${blockIndex}`);
+    const prevEl = getEl(`block_preview_${blockIndex}`);
+
+    // Clean up existing retry button if present
+    const existingRetry = getEl(`block_retry_${blockIndex}`);
+    if (existingRetry) existingRetry.remove();
+
     if (statusEl) {
       if (status === 'completed') {
         statusEl.style.background = 'rgba(16,185,129,0.2)';
         statusEl.style.color = '#34d399';
         statusEl.style.borderColor = 'rgba(16,185,129,0.4)';
         statusEl.textContent = '✅ Transcribed';
+        if (prevEl) {
+          prevEl.style.color = '#e2e8f0';
+          prevEl.textContent = transcriptPreview ? `"${transcriptPreview.slice(0, 65)}..."` : 'Audio transcribed';
+        }
+      } else if (status === 'error') {
+        statusEl.style.background = 'rgba(239,68,68,0.2)';
+        statusEl.style.color = '#f87171';
+        statusEl.style.borderColor = 'rgba(239,68,68,0.4)';
+        statusEl.textContent = '⚠️ Error';
+
+        if (statusEl.parentElement && onRetry) {
+          const retryBtn = document.createElement('button');
+          retryBtn.id = `block_retry_${blockIndex}`;
+          retryBtn.style.cssText = 'background:#4f46e5; color:#ffffff; border:none; border-radius:4px; padding:2px 7px; font-size:10px; cursor:pointer; font-weight:600; margin-left:6px; transition:all 0.2s;';
+          retryBtn.textContent = '🔄 Retry';
+          retryBtn.title = 'Retry transcribing this block';
+          retryBtn.onmouseenter = () => { retryBtn.style.background = '#4338ca'; };
+          retryBtn.onmouseleave = () => { retryBtn.style.background = '#4f46e5'; };
+          retryBtn.onclick = (e) => {
+            e.stopPropagation();
+            onRetry();
+          };
+          statusEl.parentElement.appendChild(retryBtn);
+        }
+
+        if (prevEl) {
+          prevEl.style.color = '#f87171';
+          prevEl.textContent = transcriptPreview ? `⚠️ ${transcriptPreview.slice(0, 75)}` : 'Transcription failed (Click Retry)';
+          prevEl.title = transcriptPreview || 'Click Retry to re-transcribe';
+        }
+      } else if (status === 'retrying') {
+        statusEl.style.background = 'rgba(245,158,11,0.2)';
+        statusEl.style.color = '#fbbf24';
+        statusEl.style.borderColor = 'rgba(245,158,11,0.4)';
+        statusEl.textContent = '⚡ Retrying...';
+        if (prevEl) {
+          prevEl.style.color = '#cbd5e1';
+          prevEl.textContent = transcriptPreview ? `Retrying (${transcriptPreview.slice(0, 50)})...` : 'Reconnecting to Gemini AI...';
+        }
       } else {
         statusEl.textContent = status;
-      }
-    }
-
-    if (transcriptPreview) {
-      const prevEl = getEl(`block_preview_${blockIndex}`);
-      if (prevEl) {
-        prevEl.textContent = `"${transcriptPreview.slice(0, 60)}..."`;
+        if (prevEl && transcriptPreview) {
+          prevEl.textContent = `"${transcriptPreview.slice(0, 60)}..."`;
+        }
       }
     }
   }

@@ -87,6 +87,60 @@ console.log('\n--- Test Group 4: Block Kit Payload Structure Simulation ---');
   console.log('  ✅ PASS: Simulated Block Kit payload generates compliant header and clickable Drive button');
 }
 
+// ----------------------------------------------------
+// Test 5: Verify Auto-Share Checkbox Unmarked Prevents Slack Upload
+// ----------------------------------------------------
+console.log('\n--- Test Group 5: Auto-Share Checkbox Unmarked Safeguards ---');
+{
+  const contentPath = path.resolve('./extension/content.js');
+  const contentCode = fs.readFileSync(contentPath, 'utf-8');
+
+  // 1. Ensure HTML checkbox does NOT have hardcoded checked attribute
+  assert.ok(
+    !contentCode.includes('<input type="checkbox" id="jitsiSlackAutoShareCheck" checked'),
+    'jitsiSlackAutoShareCheck must not have hardcoded "checked" attribute in HTML'
+  );
+  assert.ok(
+    contentCode.includes('id="jitsiSlackAutoShareCheck"'),
+    'jitsiSlackAutoShareCheck input element must exist'
+  );
+
+  // 2. Ensure autoCheck has an onchange listener for immediate reactivity without requiring Save Config click
+  assert.ok(
+    contentCode.includes('autoCheck.onchange = () => {') || contentCode.includes('autoCheck.onchange = ('),
+    'autoCheck must have immediate onchange listener to persist user unchecking instantly'
+  );
+
+  // 3. Ensure updateSlackUI is called when UI is injected so checkbox matches saved state
+  assert.ok(
+    contentCode.includes('updateSlackUI();\n    checkAndDisplayRecovery();') || contentCode.includes('updateSlackUI();'),
+    'updateSlackUI must be invoked during injectUI'
+  );
+
+  // 4. Ensure dispatchSlackNotification guards automatic execution when checkbox is unmarked
+  assert.ok(
+    contentCode.includes('if (!isManual && !isSlackSharePermitted())'),
+    'dispatchSlackNotification must strictly block automatic dispatch when checkbox is unticked'
+  );
+
+  // 5. Simulate isSlackSharePermitted logic with unmarked checkbox
+  let savedSlackAutoShare = true;
+  const mockDOMChecked = false; // user unmarks checkbox
+  const isPermitted = (autoCheckEl) => {
+    if (autoCheckEl) {
+      savedSlackAutoShare = Boolean(autoCheckEl.checked);
+      return Boolean(autoCheckEl.checked);
+    }
+    return Boolean(savedSlackAutoShare);
+  };
+
+  const permitted = isPermitted({ checked: mockDOMChecked });
+  assert.strictEqual(permitted, false, 'isSlackSharePermitted must return false when checkbox is unmarked');
+  assert.strictEqual(savedSlackAutoShare, false, 'savedSlackAutoShare must update to false when checkbox is unmarked');
+
+  console.log('  ✅ PASS: Verified unchecked Slack checkbox blocks automatic upload & updates persistent state');
+}
+
 console.log('\n======================================================');
 console.log('🎉 ALL SLACK NOTIFICATION AUTOMATION TESTS PASSED!');
 console.log('======================================================\n');

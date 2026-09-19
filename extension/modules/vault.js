@@ -77,14 +77,17 @@
         getReq.onsuccess = () => {
           const session = getReq.result;
           if (session) {
-            session.chunks.push({
+            const chunkItem = {
               index: chunkMeta.index,
               size: chunkBlob.size,
               timestamp: chunkMeta.timestamp,
               data: chunkBlob
-            });
-            session.chunkCount = session.chunks.length;
-            session.totalBytes = (session.totalBytes || 0) + chunkBlob.size;
+            };
+            // Cache stores strictly the previous audio chunk for abnormal drop recovery
+            session.previousChunk = chunkItem;
+            session.chunks = [chunkItem];
+            session.chunkCount = 1;
+            session.totalBytes = chunkBlob.size;
             session.updatedAt = new Date().toISOString();
             store.put(session);
           }
@@ -98,19 +101,19 @@
   }
 
   async function saveVaultCheckpoint(recordedChunks = [], isRecording = false, showToast = null) {
-    if (!isRecording || recordedChunks.length === 0) return;
+    if (!isRecording || !recordedChunks || recordedChunks.length === 0) return;
     try {
-      const totalBytes = recordedChunks.reduce((acc, c) => acc + (c.size || 0), 0);
-      const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
+      const lastChunk = recordedChunks[recordedChunks.length - 1];
+      const chunkKb = lastChunk ? (lastChunk.size / 1024).toFixed(1) : '0';
       const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       
       const badge = document.getElementById('jitsiVaultCheckpointStatus');
       if (badge) {
-        badge.innerHTML = `💾 Auto-Checkpoint at <strong>${timeStr}</strong>: ${recordedChunks.length} chunks (${totalMb} MB safely in vault)`;
+        badge.innerHTML = `💾 Drop Cache at <strong>${timeStr}</strong>: 1 chunk (${chunkKb} KB secured in vault)`;
         badge.style.color = '#34d399';
       }
       if (showToast) {
-        showToast(`💾 Auto-checkpoint: ${recordedChunks.length} audio chunks (${totalMb} MB) secured on local disk.`);
+        showToast(`💾 Drop cache active: Previous audio chunk (${chunkKb} KB) secured in vault.`);
       }
     } catch (err) {
       console.warn('[Vault] Checkpoint error:', err);
@@ -128,6 +131,7 @@
         if (session) {
           session.status = 'completed';
           session.completedAt = new Date().toISOString();
+          session.chunks = []; // Drop cache cleared on clean completion
           store.put(session);
         }
       };

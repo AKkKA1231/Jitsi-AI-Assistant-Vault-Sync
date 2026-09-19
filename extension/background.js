@@ -20,6 +20,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === 'GEMINI_TEST_KEY') {
+    handleGeminiTestKey(request)
+      .then(result => sendResponse({ success: true, data: result }))
+      .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
+    return true;
+  }
+
   if (request.action === 'GEMINI_SYNTHESIZE_SUMMARY') {
     handleGeminiSynthesizeSummary(request)
       .then(result => sendResponse({ success: true, data: result }))
@@ -134,17 +141,25 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
   }
 
   const text = await res.text().catch(() => '');
+  const lowerText = text.toLowerCase();
+  const isHtml = text.trim().startsWith('<') || text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('<head');
 
-  // Check if request was redirected to Google login due to missing permissions
-  if (res.url && res.url.includes('accounts.google.com')) {
-    throw new Error('Google Apps Script Permission Error: Web App is not set to "Who has access: Anyone". Open script.google.com > Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
+  // Check if request was blocked by Google Apps Script permission or authorization barrier
+  if (isHtml || (res.url && res.url.includes('accounts.google.com')) || lowerText.includes('servicelogin')) {
+    if (lowerText.includes('authorization needed') || text.includes('Authorization needed')) {
+      throw new Error('Google Apps Script Permission Error: Web App is not authorized or "Who has access" is not set to "Anyone". In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" and ensure permissions are authorized.');
+    }
+    if (lowerText.includes('script function not found') || lowerText.includes('dopost')) {
+      throw new Error('Google Apps Script Error: "doPost" function not found in script. Please ensure the Webhook code from the setup guide is pasted into script.google.com.');
+    }
+    if ((res.url && res.url.includes('accounts.google.com')) || lowerText.includes('servicelogin') || lowerText.includes('sign in')) {
+      throw new Error('Google Apps Script Permission Error: Web App requires login. In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
+    }
+    throw new Error('Google Apps Script returned an HTML page instead of JSON. Ensure your Web App is deployed with "Execute as: Me" and "Who has access: Anyone".');
   }
 
   if (!res.ok) {
     if (res.status === 400) {
-      if (text.includes('ServiceLogin') || text.includes('accounts.google.com')) {
-        throw new Error('Google Apps Script Permission Error: Web App is not set to "Who has access: Anyone". In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
-      }
       throw new Error('Google Apps Script returned HTTP 400. In script.google.com, ensure Web App is deployed with "Execute as: Me" and "Who has access: Anyone".');
     }
     throw new Error(`Google Apps Script returned HTTP ${res.status}${text ? ': ' + text.slice(0, 100) : ''}`);
@@ -163,7 +178,7 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
         raw: text
       };
     }
-    throw new Error(`Invalid JSON response from Apps Script: ${text ? text.slice(0, 150) : 'Empty response'}`);
+    throw new Error(`Invalid response from Apps Script: ${text ? text.slice(0, 150) : 'Empty response'}`);
   }
 
   // Handle all valid success indicators across different Apps Script implementations
@@ -325,25 +340,38 @@ async function handleSlackNotification({
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
-// Active production models from Google (verified endpoints with audio multimodal support)
+// Active production models from Google with verified audio multimodal support
+// gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
 const ACTIVE_GEMINI_MODELS = [
-  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.5-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-pro'
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash'
 ];
 
-// Compatibility cascade for tests & fallbacks
+let lastWorkingAudioModel = null;
+
+function getOrderedAudioModels() {
+  if (lastWorkingAudioModel && ACTIVE_GEMINI_MODELS.includes(lastWorkingAudioModel)) {
+    return [lastWorkingAudioModel, ...ACTIVE_GEMINI_MODELS.filter(m => m !== lastWorkingAudioModel)];
+  }
+  return [...ACTIVE_GEMINI_MODELS];
+}
+
+// Compatibility cascade for text synthesis & test assertions
 const GEMINI_MODELS = [
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro',
+  'gemini-2.5-flash',
   'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash',
   'gemini-3.6-flash',
   'gemini-flash-latest',
   'gemini-3.1-flash-lite'
 ];
 
-async function fetchWithBackoff(url, options, maxRetries = 3) {
+async function fetchWithBackoff(url, options, maxRetries = 1) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(url, options);
@@ -354,16 +382,16 @@ async function fetchWithBackoff(url, options, maxRetries = 3) {
                           response.status === 429;
 
       if (isTransient && attempt < maxRetries) {
-        const jitter = Math.floor(Math.random() * 600);
-        const delay = Math.min(8000, 1200 * Math.pow(1.8, attempt) + jitter); // ~1.2s + jitter, ~2.1s + jitter, ~3.8s + jitter
-        console.warn(`[Gemini Background] HTTP ${response.status} (Transient Error: ${response.statusText || 'Overloaded'}). Retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})...`);
+        const jitter = Math.floor(Math.random() * 300);
+        const delay = 800 + jitter; // Fast ~800-1100ms retry before cascading to next model
+        console.warn(`[Gemini Background] HTTP ${response.status} (${response.statusText || 'Overloaded'}). Quick retry in ${delay}ms before model cascade...`);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
       return response;
     } catch (networkErr) {
       if (attempt < maxRetries) {
-        const delay = 1500 * (attempt + 1);
+        const delay = 1000 * (attempt + 1);
         console.warn(`[Gemini Background] Network error (${networkErr.message}). Retrying in ${delay}ms...`);
         await new Promise(r => setTimeout(r, delay));
         continue;
@@ -374,9 +402,9 @@ async function fetchWithBackoff(url, options, maxRetries = 3) {
 }
 
 async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName }) {
-  const activeKey = apiKey || DEFAULT_GEMINI_KEY;
+  const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
-    throw new Error('No Gemini API key provided. Please configure your API key in the extension settings.');
+    throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
   }
   if (!base64Audio) {
     throw new Error('No audio data provided to transcribe.');
@@ -416,7 +444,8 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
   };
 
   let lastError = null;
-  for (const model of ACTIVE_GEMINI_MODELS) {
+  const modelsToTry = getOrderedAudioModels();
+  for (const model of modelsToTry) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       console.log(`[Gemini Background] Requesting transcription via ${model}...`);
@@ -428,8 +457,23 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
       });
 
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Model ${model} returned (${response.status}): ${errText}`);
+        let errMsg = `Model ${model} returned (${response.status})`;
+        try {
+          const rawText = await response.text();
+          const errJson = JSON.parse(rawText);
+          if (errJson?.error?.message) {
+            errMsg = errJson.error.message;
+          } else if (rawText) {
+            errMsg = rawText;
+          }
+        } catch (e) {}
+
+        if (response.status === 503) {
+          errMsg = 'Gemini servers temporarily overloaded (503). Click Retry in a moment.';
+        } else if (response.status === 400 && errMsg.toLowerCase().includes('api_key')) {
+          errMsg = 'Invalid Gemini API key. Please check your key in Settings.';
+        }
+        throw new Error(errMsg);
       }
 
       const data = await response.json();
@@ -439,6 +483,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
       }
 
       console.log(`[Gemini Background] Successfully transcribed via ${model}`);
+      lastWorkingAudioModel = model;
 
       // Parse sections
       const extractedDecisions = [];
@@ -480,9 +525,9 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
  * Transcribes an individual 3-5 minute audio chunk
  */
 async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName }) {
-  const activeKey = apiKey || DEFAULT_GEMINI_KEY;
+  const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
-    throw new Error('No Gemini API key provided.');
+    throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
   }
   if (!base64Audio) {
     return { chunkIndex, transcript: '' };
@@ -510,7 +555,8 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
   };
 
   let lastError = null;
-  for (const model of ACTIVE_GEMINI_MODELS) {
+  const modelsToTry = getOrderedAudioModels();
+  for (const model of modelsToTry) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       const response = await fetchWithBackoff(url, {
@@ -520,19 +566,116 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
       });
 
       if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Model ${model} returned (${response.status}): ${errText}`);
+        let errMsg = `Model ${model} returned (${response.status})`;
+        try {
+          const rawText = await response.text();
+          const errJson = JSON.parse(rawText);
+          if (errJson?.error?.message) {
+            errMsg = errJson.error.message;
+          } else if (rawText) {
+            errMsg = rawText;
+          }
+        } catch (e) {}
+
+        if (response.status === 400 && errMsg.toLowerCase().includes('api_key')) {
+          throw new Error('Invalid Gemini API key. Please check your key in Settings.');
+        } else if (response.status === 503) {
+          errMsg = `Model ${model} overloaded (503). Cascading to next model...`;
+        } else if (response.status === 429) {
+          errMsg = `Model ${model} rate/quota limit reached (429). Cascading to next model...`;
+        }
+        throw new Error(errMsg);
       }
 
       const data = await response.json();
       const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      lastWorkingAudioModel = model;
       return { chunkIndex, transcript: transcript.trim(), modelUsed: model };
     } catch (err) {
+      if (err.message.includes('Invalid Gemini API key')) {
+        throw err; // Fail fast on invalid key, do not waste time cycling models
+      }
       lastError = err;
     }
   }
 
-  throw lastError || new Error(`Failed to transcribe chunk #${chunkIndex + 1}`);
+  throw lastError || new Error(`Failed to transcribe chunk #${chunkIndex}`);
+}
+
+/**
+ * Validates Gemini API Key with a lightweight ping to Google Generative Language API
+ */
+async function handleGeminiTestKey({ apiKey }) {
+  let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
+  activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
+  if (!activeKey) {
+    throw new Error('Please enter a Gemini API key first.');
+  }
+
+  const testPayload = {
+    contents: [{ parts: [{ text: 'Hello, respond with: OK' }] }]
+  };
+
+  // Test against universally available GA models first (gemini-1.5-flash, gemini-2.0-flash)
+  const testModels = [
+    'gemini-1.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash-8b'
+  ];
+
+  let lastErr = null;
+  for (const model of testModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testPayload)
+      });
+
+      if (res.ok) {
+        lastWorkingAudioModel = model;
+        return { success: true, modelUsed: model, message: `Connected! Verified with ${model}.` };
+      }
+
+      let errDetail = `HTTP ${res.status}`;
+      let errReason = '';
+      try {
+        const txt = await res.text();
+        const json = JSON.parse(txt);
+        if (json?.error?.message) errDetail = json.error.message;
+        if (json?.error?.details?.[0]?.reason) errReason = json.error.details[0].reason;
+      } catch (e) {}
+
+      if (res.status === 400) {
+        if (errReason === 'API_KEY_INVALID' || errDetail.toLowerCase().includes('api key not valid') || errDetail.toLowerCase().includes('api_key')) {
+          throw new Error('Invalid Gemini API Key. Google rejected this key. Please get a valid key from https://aistudio.google.com/app/apikey (keys start with "AIzaSy...").');
+        }
+        throw new Error(`Invalid request (${errDetail}). Please verify your Gemini API key in Settings.`);
+      }
+
+      if (res.status === 403) {
+        if (errDetail.includes('API has not been used') || errDetail.includes('disabled')) {
+          throw new Error('Generative Language API is disabled for this project. Please enable it in Google Cloud Console or create a new key in Google AI Studio.');
+        }
+        throw new Error(`Google API Permission Denied (403): ${errDetail}`);
+      }
+
+      if (res.status === 429) {
+        throw new Error('Gemini quota / rate limit reached (429). Please check your Google AI Studio quota.');
+      }
+
+      lastErr = new Error(`${model}: ${errDetail}`);
+    } catch (e) {
+      if (e.message.includes('Invalid Gemini API Key') || e.message.includes('Permission Denied') || e.message.includes('quota / rate limit') || e.message.includes('Generative Language API is disabled')) {
+        throw e;
+      }
+      lastErr = e;
+    }
+  }
+
+  throw lastErr || new Error('Unable to connect to Gemini API. Check your connection or API key.');
 }
 
 /**

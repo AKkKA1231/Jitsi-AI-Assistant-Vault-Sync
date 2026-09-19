@@ -284,6 +284,35 @@ await itAsync('Should gracefully catch and format Webhook HTTP errors', async ()
   }
 });
 
+await itAsync('Should detect Google Apps Script "Authorization needed" HTML response and provide actionable guidance', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => '<html><head><title>Authorization needed</title><style>.auth-body {font-family: Roboto;}</style></head><body>Authorization required</body></html>'
+  });
+
+  try {
+    await assert.rejects(
+      async () => {
+        await uploader.uploadViaWebhook({
+          webhookUrl: 'https://script.google.com/macros/s/unauth/exec',
+          folderName: 'AuthTest',
+          audioBlob: null,
+          audioFileName: 'audio.webm',
+          markdownText: 'notes',
+          markdownFileName: 'notes.md',
+          onProgress: () => {}
+        });
+      },
+      /Google Apps Script Permission Error: Web App is not authorized or "Who has access" is not set to "Anyone"/,
+      'Must identify Authorization needed HTML and advise setting access to Anyone'
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 4. Google Drive REST API v3 Multipart Protocol Test
 // ---------------------------------------------------------------------------

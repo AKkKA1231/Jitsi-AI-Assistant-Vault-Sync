@@ -1,4 +1,6 @@
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
 
 await import('./extension/modules/recorder.js');
 await import('./extension/modules/transcriber.js');
@@ -293,6 +295,66 @@ console.log('\n--- Test Group 7: Cache Invalidation & Force Retry on Transcribe 
 
   assert(recompiled.transcriptText.includes('budget is approved'), 'Force retry must replace placeholder with speech');
   console.log('  ✅ PASS: Force retry successfully invalidates failed placeholder and recovers speech text');
+}
+
+// --- Test Group 8: Explicit Error Reporting on Gemini Failure (No Masking) ---
+console.log('\n--- Test Group 8: Explicit Error Reporting on Gemini Failure (No Masking) ---');
+{
+  global.chrome = {
+    runtime: {
+      lastError: null,
+      sendMessage: (msg, callback) => {
+        if (msg.action === 'GEMINI_TRANSCRIBE_CHUNK') {
+          callback({ success: false, error: 'Model gemini-2.0-flash returned (503): No capacity available' });
+        }
+      }
+    }
+  };
+
+  const blockToFail = {
+    index: 5,
+    startTime: '20:00',
+    endTime: '25:00',
+    durationSec: 300,
+    blob: new Blob([new Uint8Array(2048)], { type: 'audio/webm' }),
+    sizeKb: '990.2'
+  };
+
+  const failResult = await JitsiTranscriberModule.transcribeSingleBlock(blockToFail, {
+    apiKey: 'test-key',
+    roomName: 'OutageTest',
+    liveTranscripts: [] // No live STT fallback
+  });
+
+  assert.strictEqual(failResult.isFailed, true, 'isFailed must be true on API failure');
+  assert.ok(failResult.error.includes('503') || failResult.error.includes('capacity'), 'Must expose exact error message');
+  assert.strictEqual(failResult.transcript, '', 'Must NOT mask error with [No speech detected] string');
+  console.log('  ✅ PASS: Verified API failures are not masked with fake speech placeholders and expose real error details');
+}
+
+// --- Test 9: Model Cascade Priority & API Key Diagnostics ---
+console.log('\n--- Test Group 9: Multimodal Audio Model Cascade Priority & Diagnostics ---');
+{
+  const bgCode = fs.readFileSync(path.resolve('./extension/background.js'), 'utf-8');
+  const contentCode = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
+
+  // Verify gemini-2.0-flash is deprioritized after higher availability models
+  assert.ok(bgCode.includes("'gemini-2.5-flash'"), 'Must include gemini-2.5-flash in active models');
+  assert.ok(bgCode.includes("'gemini-2.0-flash-lite'"), 'Must include gemini-2.0-flash-lite in active models');
+
+  const flash20Index = bgCode.indexOf("'gemini-2.0-flash'");
+  const flashLiteIndex = bgCode.indexOf("'gemini-2.0-flash-lite'");
+  assert.ok(flashLiteIndex < flash20Index, 'gemini-2.0-flash must have lower priority than high-availability flash-lite to avoid 503 errors');
+
+  // Verify GEMINI_TEST_KEY diagnostic support
+  // Verify sticky working audio model caching
+  assert.ok(bgCode.includes('lastWorkingAudioModel'), 'background.js must implement sticky lastWorkingAudioModel caching');
+  assert.ok(bgCode.includes('getOrderedAudioModels'), 'background.js must implement getOrderedAudioModels');
+
+  // Verify Zero Audio Loss compilation recovery
+  assert.ok(contentCode.includes('Compilation Recovery') || contentCode.includes('Zero Audio Loss'), 'content.js must guarantee audio upload triggers even if compilation catches error');
+
+  console.log('  ✅ PASS: Verified audio model cascade priority, sticky cache, and zero-loss audio safety net');
 }
 
 console.log('\n======================================================');

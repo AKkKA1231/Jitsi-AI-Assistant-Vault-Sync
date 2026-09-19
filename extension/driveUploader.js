@@ -310,6 +310,22 @@
       }
       if (!json && typeof res.text === 'function') {
         const text = await res.text().catch(() => '');
+        const lowerText = text.toLowerCase();
+        const isHtml = text.trim().startsWith('<') || text.includes('<!DOCTYPE') || text.includes('<html') || text.includes('<head');
+
+        if (isHtml || (res.url && res.url.includes('accounts.google.com')) || lowerText.includes('servicelogin')) {
+          if (lowerText.includes('authorization needed') || text.includes('Authorization needed')) {
+            throw new Error('Google Apps Script Permission Error: Web App is not authorized or "Who has access" is not set to "Anyone". In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" and ensure permissions are authorized.');
+          }
+          if (lowerText.includes('script function not found') || lowerText.includes('dopost')) {
+            throw new Error('Google Apps Script Error: "doPost" function not found in script. Please ensure the Webhook code from the setup guide is pasted into script.google.com.');
+          }
+          if ((res.url && res.url.includes('accounts.google.com')) || lowerText.includes('servicelogin') || lowerText.includes('sign in')) {
+            throw new Error('Google Apps Script Permission Error: Web App requires login. In script.google.com, click Deploy > Manage deployments > Edit > set "Who has access" to "Anyone" > Deploy.');
+          }
+          throw new Error('Google Apps Script returned an HTML page instead of JSON. Ensure your Web App is deployed with "Execute as: Me" and "Who has access: Anyone".');
+        }
+
         try {
           json = JSON.parse(text);
         } catch (parseErr) {

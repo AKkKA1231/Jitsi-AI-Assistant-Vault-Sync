@@ -19,10 +19,11 @@
   const STORAGE_ACTIVE_KEY = 'jitsi_plugin_active_idx_v3';
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
   const GEMINI_CASCADE = [
-    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-2.5-flash',
     'gemini-1.5-flash',
     'gemini-1.5-flash-8b',
-    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
     'gemini-3.6-flash',
     'gemini-flash-latest',
     'gemini-3.1-flash-lite'
@@ -103,11 +104,27 @@
   } catch (e) {}
 
   const STORAGE_SLACK_AUTO_KEY = 'jitsi_slack_auto_share';
-  let savedSlackAutoShare = true;
+  let savedSlackAutoShare = false;
   try {
     const sAuto = window.localStorage.getItem(STORAGE_SLACK_AUTO_KEY);
     if (sAuto !== null) savedSlackAutoShare = sAuto === 'true';
   } catch (e) {}
+
+  function isSlackSharePermitted() {
+    const autoCheck = document.getElementById('jitsiSlackAutoShareCheck');
+    if (autoCheck) {
+      savedSlackAutoShare = Boolean(autoCheck.checked);
+      return Boolean(autoCheck.checked);
+    }
+    try {
+      const sAuto = window.localStorage.getItem(STORAGE_SLACK_AUTO_KEY);
+      if (sAuto !== null) {
+        savedSlackAutoShare = sAuto === 'true';
+        return savedSlackAutoShare;
+      }
+    } catch (e) {}
+    return Boolean(savedSlackAutoShare);
+  }
 
   let lastUploadedFolderUrl = '';
   let activeMeetingBlockTranscripts = {};
@@ -155,12 +172,16 @@
     }
     const autoBox = document.getElementById('jitsiSlackAutoShareCheck');
     if (autoBox) {
-      autoBox.checked = savedSlackAutoShare;
+      autoBox.checked = Boolean(savedSlackAutoShare);
     }
   }
 
   function saveSettings() {
     try {
+      const autoCheck = document.getElementById('jitsiSlackAutoShareCheck');
+      if (autoCheck) {
+        savedSlackAutoShare = Boolean(autoCheck.checked);
+      }
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
       window.localStorage.setItem(STORAGE_ACTIVE_KEY, String(activeAccIdx));
       window.localStorage.setItem(STORAGE_AI_KEY, geminiApiKey);
@@ -225,6 +246,10 @@
           savedSlackWebhookUrl = changes[STORAGE_SLACK_WEBHOOK_KEY].newValue.trim();
           updateSlackUI();
         }
+        if (changes[STORAGE_SLACK_AUTO_KEY] && typeof changes[STORAGE_SLACK_AUTO_KEY].newValue === 'boolean') {
+          savedSlackAutoShare = changes[STORAGE_SLACK_AUTO_KEY].newValue;
+          updateSlackUI();
+        }
       });
     }
   } catch (e) {}
@@ -236,7 +261,29 @@
   const AudioMixer = window.JitsiAudioMixer || {};
   const Recorder = window.JitsiRecorder || {};
   const Transcriber = window.JitsiTranscriber || {};
-  const UI = window.JitsiUI || {};
+  const UI = window.JitsiUI || {
+    switchTab: (tabId) => {
+      const tabMap = { recording: 'audio', audio: 'audio', notes: 'notes', settings: 'settings' };
+      const active = tabMap[tabId] || 'audio';
+      ['audio', 'notes', 'settings'].forEach(t => {
+        const btn = document.getElementById(`jitsiTabBtn_${t}`) || document.querySelector(`[data-tab="${t}"]`) || (t === 'audio' ? document.querySelector('[data-tab="recording"]') : null);
+        const content = document.getElementById(`jitsiTabContent_${t}`) || (t === 'audio' ? document.getElementById('jitsiRecordingTab') : (t === 'notes' ? document.getElementById('jitsiNotesTab') : document.getElementById('jitsiSettingsTab')));
+        if (btn) btn.classList.toggle('active', t === active);
+        if (content) {
+          content.classList.toggle('active', t === active);
+          content.style.display = t === active ? 'block' : 'none';
+        }
+      });
+    },
+    escapeHtml: (t) => {
+      const d = document.createElement('div');
+      d.textContent = t || '';
+      return d.innerHTML;
+    },
+    showToast: (msg, isErr) => {
+      console.log(`[Toast] ${isErr ? 'ERR: ' : ''}${msg}`);
+    }
+  };
   const DriveUploader = window.JitsiDriveUploader || {};
 
   // Export database identifiers for automated test suites
@@ -412,9 +459,13 @@
 
       // 2. Switch tab to notes & execute fast-path compilation
       UI.switchTab('notes');
-      await executeParallelTranscription();
+      try {
+        await executeParallelTranscription();
+      } catch (compileErr) {
+        console.error('[Compilation Recovery]:', compileErr);
+      }
 
-      // 3. Automatically sync to Google Drive
+      // 3. Automatically sync to Google Drive (Zero Audio Loss Guarantee!)
       await executeDriveUpload({ isAuto: true });
     } else {
       // Start fresh recording session
@@ -481,29 +532,42 @@
           showToast(`⚡ Sealed Block #${sealedBlock.index} [${sealedBlock.startTime}-${sealedBlock.endTime}]. Transcribing with Gemini Flash in background...`);
 
           // 2. Preemptively transcribe in background with Web Speech STT fallback
-          const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
+          const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
           Transcriber.transcribeSingleBlock(sealedBlock, {
             apiKey: activeKey,
             roomName: room,
             liveTranscripts: liveCapturedTranscripts
           }).then((result) => {
             activeMeetingBlockTranscripts[sealedBlock.index] = result;
-            UI.updateBlockStatus(sealedBlock.index, 'completed', result.transcript);
-            showToast(`✅ Block #${sealedBlock.index} transcribed in background!`);
+            if (result.isFailed) {
+              UI.updateBlockStatus(sealedBlock.index, 'error', result.error || 'Transcription failed', () => retrySingleBlock(sealedBlock.index));
+              updateRetryFailedBtnVisibility();
+              showToast(`⚠️ Block #${sealedBlock.index} transcription failed: ${result.error || 'Check API key'}. Click Retry.`, true);
+            } else {
+              UI.updateBlockStatus(sealedBlock.index, 'completed', result.transcript);
+              updateRetryFailedBtnVisibility();
+              showToast(`✅ Block #${sealedBlock.index} transcribed in background!`);
 
-            // Append preview snippet to transcript box
-            const tb = getEl('jitsiTranscriptBox');
-            if (tb && result.transcript) {
-              const ph = tb.querySelector('em');
-              if (ph) ph.remove();
-              const item = document.createElement('div');
-              item.style.marginBottom = '8px';
-              item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:700;">[Block #${sealedBlock.index} ${sealedBlock.startTime}-${sealedBlock.endTime}]</span> <div>${UI.escapeHtml(result.transcript)}</div>`;
-              tb.appendChild(item);
-              tb.scrollTop = tb.scrollHeight;
+              // Append preview snippet to transcript box
+              const tb = getEl('jitsiTranscriptBox');
+              if (tb && result.transcript) {
+                const ph = tb.querySelector('em');
+                if (ph) ph.remove();
+                let item = getEl(`transcript_block_item_${sealedBlock.index}`);
+                if (!item) {
+                  item = document.createElement('div');
+                  item.id = `transcript_block_item_${sealedBlock.index}`;
+                  item.style.marginBottom = '8px';
+                  tb.appendChild(item);
+                }
+                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:700;">[Block #${sealedBlock.index} ${sealedBlock.startTime}-${sealedBlock.endTime}]</span> <div>${UI.escapeHtml(result.transcript)}</div>`;
+                tb.scrollTop = tb.scrollHeight;
+              }
             }
           }).catch((err) => {
             console.warn(`[Background STT] Block #${sealedBlock.index} notice:`, err);
+            UI.updateBlockStatus(sealedBlock.index, 'error', err.message || 'Error', () => retrySingleBlock(sealedBlock.index));
+            updateRetryFailedBtnVisibility();
           });
         },
         onVaultCheckpoint: (chunks) => {
@@ -526,6 +590,88 @@
         recBtn.disabled = false;
         recBtn.style.opacity = '1';
       }
+    }
+  }
+
+  function updateRetryFailedBtnVisibility() {
+    const btn = getEl('jitsiRetryFailedBlocksBtn');
+    if (!btn) return;
+    const hasFailed = Object.values(activeMeetingBlockTranscripts).some(r => r && r.isFailed);
+    btn.style.display = hasFailed ? 'inline-block' : 'none';
+  }
+
+  async function retrySingleBlock(blockIndex) {
+    const blocks = Recorder.getLogicalBlocks ? Recorder.getLogicalBlocks() : [];
+    const targetBlock = blocks.find(b => b.index === blockIndex);
+    if (!targetBlock) {
+      showToast(`Block #${blockIndex} audio not found in memory.`, true);
+      return;
+    }
+
+    UI.updateBlockStatus(blockIndex, 'retrying');
+    showToast(`⚡ Retrying transcription for Block #${blockIndex}...`);
+
+    const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
+    const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
+
+    try {
+      const result = await Transcriber.transcribeSingleBlock(targetBlock, {
+        apiKey: activeKey,
+        roomName: room,
+        liveTranscripts: liveCapturedTranscripts
+      });
+
+      activeMeetingBlockTranscripts[blockIndex] = result;
+
+      if (result.isFailed) {
+        UI.updateBlockStatus(blockIndex, 'error', result.error || 'Transcription failed', () => retrySingleBlock(blockIndex));
+        updateRetryFailedBtnVisibility();
+        showToast(`⚠️ Block #${blockIndex} retry failed: ${result.error || 'Check API key'}`, true);
+      } else {
+        UI.updateBlockStatus(blockIndex, 'completed', result.transcript);
+        updateRetryFailedBtnVisibility();
+        showToast(`✅ Block #${blockIndex} transcribed successfully!`);
+
+        const tb = getEl('jitsiTranscriptBox');
+        if (tb && result.transcript) {
+          const ph = tb.querySelector('em');
+          if (ph) ph.remove();
+          let item = getEl(`transcript_block_item_${blockIndex}`);
+          if (!item) {
+            item = document.createElement('div');
+            item.id = `transcript_block_item_${blockIndex}`;
+            item.style.marginBottom = '8px';
+            tb.appendChild(item);
+          }
+          item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:700;">[Block #${blockIndex} ${targetBlock.startTime}-${targetBlock.endTime}]</span> <div>${UI.escapeHtml(result.transcript)}</div>`;
+          tb.scrollTop = tb.scrollHeight;
+        }
+      }
+    } catch (err) {
+      UI.updateBlockStatus(blockIndex, 'error', err.message || 'Transcription error', () => retrySingleBlock(blockIndex));
+      updateRetryFailedBtnVisibility();
+      showToast(`⚠️ Block #${blockIndex} retry error: ${err.message}`, true);
+    }
+  }
+
+  async function retryAllFailedBlocks() {
+    const failedIndices = Object.keys(activeMeetingBlockTranscripts)
+      .map(Number)
+      .filter(idx => activeMeetingBlockTranscripts[idx] && activeMeetingBlockTranscripts[idx].isFailed);
+
+    if (failedIndices.length === 0) {
+      showToast('No failed blocks to retry.');
+      return;
+    }
+
+    showToast(`⚡ Retrying ${failedIndices.length} failed block(s)...`);
+    const btn = getEl('jitsiRetryFailedBlocksBtn');
+    if (btn) btn.disabled = true;
+    try {
+      await Promise.allSettled(failedIndices.map(idx => retrySingleBlock(idx)));
+    } finally {
+      if (btn) btn.disabled = false;
+      updateRetryFailedBtnVisibility();
     }
   }
 
@@ -679,7 +825,14 @@
           shareSlackBtn.textContent = '📢 Share to Slack Channel';
           shareSlackBtn.style.background = '';
           shareSlackBtn.style.color = '';
-          shareSlackBtn.onclick = () => dispatchSlackNotification({ folderUrl, isManual: true });
+          shareSlackBtn.onclick = () => {
+            if (!savedSlackWebhookUrl || !savedSlackWebhookUrl.includes('hooks.slack.com')) {
+              showToast('⚠️ Please configure your Slack Webhook URL in Settings (⚙️) first.', true);
+              UI.switchTab('settings');
+              return;
+            }
+            dispatchSlackNotification({ folderUrl, isManual: true });
+          };
         }
 
         if (isNotesOnly && compiledAudioBlob) {
@@ -688,9 +841,11 @@
         if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Uploaded to Google Drive (${acc.name})!`);
 
-        // Automatic dispatch to Slack if enabled
-        if (savedSlackAutoShare && savedSlackWebhookUrl) {
+        // Automatic dispatch to Slack IF AND ONLY IF the checkbox in settings is ticked
+        if (isSlackSharePermitted() && savedSlackWebhookUrl) {
           dispatchSlackNotification({ folderUrl, isManual: false });
+        } else {
+          console.log('[Slack] Automatic dispatch skipped because Share to Slack checkbox is unticked in Settings.');
         }
       } else if (result.isUnconfigured) {
         // Safe offline preservation
@@ -736,6 +891,12 @@
    * Dispatches meeting notes & Google Drive folder URL to Slack Webhook
    */
   async function dispatchSlackNotification({ folderUrl, isManual = false } = {}) {
+    // Strictly verify permission: If automatic trigger and checkbox is unticked, NEVER hit webhook
+    if (!isManual && !isSlackSharePermitted()) {
+      console.log('[Slack Webhook] Blocked: Auto-share to Slack checkbox is unticked in Settings.');
+      return;
+    }
+
     const activeAcc = (typeof accounts !== 'undefined' && accounts && accounts[activeAccIdx]) || {};
     const dedicatedFallback = `https://drive.google.com/drive/search?q=${encodeURIComponent(activeAcc.folderName || 'meetingRecords')}`;
     const targetUrl = folderUrl || lastUploadedFolderUrl || dedicatedFallback;
@@ -998,6 +1159,7 @@
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <div class="jitsi-ai-ext-section-title" id="jitsiBlockSectionHeader" style="margin:0;">5-Minute Parallel Speech Blocks (<span id="jitsiChunkCountBadge">0</span>)</div>
+          <button id="jitsiRetryFailedBlocksBtn" style="background:transparent; border:1px solid rgba(245,158,11,0.5); color:#fbbf24; border-radius:4px; font-size:10px; padding:2px 7px; cursor:pointer; display:none;" title="Retry transcribing all failed blocks">🔄 Retry Failed</button>
         </div>
         <div id="jitsiChunksList" style="max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px;">
           <em style="color:#64748b; font-size:11px; padding:6px 0;">5-minute speech segments will appear here as participants talk...</em>
@@ -1051,7 +1213,11 @@
             <span id="jitsiAiKeyBadge" class="jitsi-ai-badge" style="font-size:10px;">No Key</span>
           </div>
           <input type="password" id="jitsiGeminiKeyInput" placeholder="Enter Gemini API Key" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
-          <button id="jitsiSaveGeminiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="width:100%; font-size:11px;">💾 Save Gemini Key</button>
+          <div style="display:flex; gap:6px;">
+            <button id="jitsiSaveGeminiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; font-size:11px;">💾 Save Gemini Key</button>
+            <button id="jitsiTestGeminiKeyBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🔔 Test Gemini Key</button>
+          </div>
+          <div id="jitsiGeminiKeyStatus" style="font-size:11px; margin-top:8px; line-height:1.4; display:none;"></div>
         </div>
 
         <div class="jitsi-ai-ext-section-title">Audio Chunk Duration</div>
@@ -1112,7 +1278,7 @@
           </p>
           <input type="url" id="jitsiSlackWebhookInput" placeholder="https://hooks.slack.com/services/T.../B.../X..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-            <input type="checkbox" id="jitsiSlackAutoShareCheck" checked style="accent-color:#10b981; cursor:pointer;">
+            <input type="checkbox" id="jitsiSlackAutoShareCheck" style="accent-color:#10b981; cursor:pointer;">
             <label for="jitsiSlackAutoShareCheck" style="font-size:11px; color:#cbd5e1; cursor:pointer;">Auto-share Drive link & summary to Slack after upload</label>
           </div>
           <div style="display:flex; gap:6px;">
@@ -1133,7 +1299,10 @@
           <input type="password" id="jitsiAccTokenInput" placeholder="ya29..." style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
           <div style="font-size:11px; color:#94a3b8; margin-bottom:4px;">Target Drive Folder Name:</div>
           <input type="text" id="jitsiAccFolderInput" placeholder="meetingRecords" style="width:calc(100% - 16px); padding:8px; border-radius:6px; background:#0f172a; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px; margin-bottom:8px;">
-          <button id="jitsiSaveAccBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="width:100%; font-size:11px;">💾 Save Account Settings</button>
+          <div style="display:flex; gap:6px;">
+            <button id="jitsiSaveAccBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-primary" style="flex:1; font-size:11px;">💾 Save Account</button>
+            <button id="jitsiTestDriveBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🔔 Test Webhook</button>
+          </div>
         </div>
       </div>
 
@@ -1230,9 +1399,139 @@
         }, 50);
       });
       getEl('jitsiSaveGeminiKeyBtn').onclick = () => {
-        geminiApiKey = (keyInput.value || '').trim();
+        let key = (keyInput.value || '').trim();
+        key = key.replace(/^["'`\s]+|["'`\s]+$/g, '');
+        keyInput.value = key;
+        geminiApiKey = key;
         saveSettings();
+        const statusDiv = getEl('jitsiGeminiKeyStatus');
+        if (statusDiv) {
+          statusDiv.style.display = 'block';
+          statusDiv.style.color = '#34d399';
+          statusDiv.innerHTML = '💾 Gemini API key saved locally.';
+        }
         showToast('Gemini Flash API Key saved!');
+        updateAiKeyDisplay();
+      };
+      const testGeminiBtn = getEl('jitsiTestGeminiKeyBtn');
+      if (testGeminiBtn) {
+        testGeminiBtn.onclick = async () => {
+          let key = (keyInput.value || geminiApiKey || '').trim();
+          key = key.replace(/^["'`\s]+|["'`\s]+$/g, '');
+          keyInput.value = key;
+
+          const statusDiv = getEl('jitsiGeminiKeyStatus');
+          const badge = getEl('jitsiAiKeyBadge');
+
+          if (!key) {
+            if (statusDiv) {
+              statusDiv.style.display = 'block';
+              statusDiv.style.color = '#fbbf24';
+              statusDiv.innerHTML = '⚠️ Please paste your Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">Google AI Studio</a> first.';
+            }
+            if (badge) {
+              badge.textContent = 'No Key';
+              badge.style.color = '#94a3b8';
+            }
+            showToast('Please enter a Gemini API key first.', true);
+            return;
+          }
+
+          testGeminiBtn.disabled = true;
+          testGeminiBtn.textContent = 'Testing...';
+          if (statusDiv) {
+            statusDiv.style.display = 'block';
+            statusDiv.style.color = '#818cf8';
+            statusDiv.innerHTML = '⏳ Contacting Google Gemini AI endpoint...';
+          }
+
+          try {
+            const res = await new Promise((resolve, reject) => {
+              if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                chrome.runtime.sendMessage({
+                  action: 'GEMINI_TEST_KEY',
+                  apiKey: key
+                }, (response) => {
+                  if (chrome.runtime.lastError) {
+                    const msg = chrome.runtime.lastError.message || '';
+                    if (msg.includes('message port closed') || msg.includes('Receiving end does not exist') || msg.includes('Extension context invalidated')) {
+                      reject(new Error('Extension needs reload: Open chrome://extensions, click the ⟳ reload icon on "Meetings_AI Assistant", then refresh this call tab.'));
+                    } else {
+                      reject(new Error(msg));
+                    }
+                  } else if (response && response.success) {
+                    resolve(response.data);
+                  } else if (response && response.error) {
+                    reject(new Error(response.error));
+                  } else {
+                    reject(new Error('Extension background worker did not respond. Please reload the extension at chrome://extensions.'));
+                  }
+                });
+              } else {
+                resolve({ message: 'Connected!' });
+              }
+            });
+
+            geminiApiKey = key;
+            saveSettings();
+            showToast(`✅ ${res.message || 'Gemini API key verified successfully!'}`);
+
+            if (badge) {
+              badge.textContent = '✓ Verified';
+              badge.style.color = '#34d399';
+            }
+            if (statusDiv) {
+              statusDiv.style.display = 'block';
+              statusDiv.style.color = '#34d399';
+              statusDiv.innerHTML = `✅ <strong>Connected!</strong> Verified with <code>${res.modelUsed || 'Gemini AI'}</code>. Speech transcription is ready!`;
+            }
+          } catch (err) {
+            const errMsg = err.message || err.toString();
+            showToast(`❌ ${errMsg}`, true);
+
+            if (badge) {
+              badge.textContent = 'Key Error';
+              badge.style.color = '#f87171';
+            }
+            if (statusDiv) {
+              statusDiv.style.display = 'block';
+              statusDiv.style.color = '#f87171';
+
+              if (errMsg.includes('Extension needs reload') || errMsg.includes('chrome://extensions')) {
+                statusDiv.innerHTML = `⚠️ <strong>Extension Reload Needed:</strong> Go to <code>chrome://extensions</code>, click the <strong>⟳ reload icon</strong> on Meetings_AI Assistant, then refresh this meeting page.`;
+              } else if (errMsg.includes('Invalid Gemini API Key') || errMsg.includes('Google rejected this key')) {
+                statusDiv.innerHTML = `❌ <strong>Invalid Key:</strong> Google rejected this API key. Please generate a new free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">aistudio.google.com</a> (starts with <code>AIzaSy...</code>).`;
+              } else if (errMsg.includes('Permission Denied') || errMsg.includes('disabled')) {
+                statusDiv.innerHTML = `❌ <strong>API Disabled:</strong> Generative Language API is disabled in your Google Cloud project. Enable it or create a key directly at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">Google AI Studio</a>.`;
+              } else if (errMsg.includes('quota') || errMsg.includes('429')) {
+                statusDiv.innerHTML = `❌ <strong>Rate Limit / Quota (429):</strong> Google AI Studio free tier rate limit reached. Please wait 1-2 minutes.`;
+              } else {
+                statusDiv.innerHTML = `❌ <strong>Error:</strong> ${UI.escapeHtml(errMsg)}`;
+              }
+            }
+          } finally {
+            testGeminiBtn.disabled = false;
+            testGeminiBtn.textContent = '🔔 Test Gemini Key';
+          }
+        };
+      }
+    }
+
+    const autoCheck = getEl('jitsiSlackAutoShareCheck');
+    if (autoCheck) {
+      autoCheck.checked = Boolean(savedSlackAutoShare);
+      autoCheck.onchange = () => {
+        savedSlackAutoShare = Boolean(autoCheck.checked);
+        try {
+          window.localStorage.setItem(STORAGE_SLACK_AUTO_KEY, String(savedSlackAutoShare));
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            const area = chrome.storage.sync || chrome.storage.local;
+            if (area) {
+              area.set({ [STORAGE_SLACK_AUTO_KEY]: savedSlackAutoShare });
+            }
+          }
+        } catch (e) {}
+        showToast(savedSlackAutoShare ? '✅ Auto-share to Slack enabled' : '⏸️ Auto-share to Slack disabled');
       };
     }
 
@@ -1240,9 +1539,11 @@
     if (saveSlackBtn) {
       saveSlackBtn.onclick = () => {
         const urlInput = getEl('jitsiSlackWebhookInput');
-        const autoCheck = getEl('jitsiSlackAutoShareCheck');
+        const autoBox = getEl('jitsiSlackAutoShareCheck');
         savedSlackWebhookUrl = (urlInput?.value || '').trim();
-        savedSlackAutoShare = Boolean(autoCheck?.checked);
+        if (autoBox) {
+          savedSlackAutoShare = Boolean(autoBox.checked);
+        }
         saveSettings();
         updateSlackUI();
         showToast('💾 Slack settings saved!');
@@ -1406,8 +1707,48 @@
     const saveAccBtnBottom = getEl('jitsiSaveAccBtn');
     if (saveAccBtnBottom) saveAccBtnBottom.onclick = saveActiveAccountDetails;
 
+    const testDriveBtn = getEl('jitsiTestDriveBtn');
+    if (testDriveBtn) {
+      testDriveBtn.onclick = async () => {
+        const webInput = getEl('jitsiAccWebhookInput');
+        const url = (webInput?.value || accounts[activeAccIdx]?.webhookUrl || '').trim();
+        if (!url) {
+          showToast('⚠️ Please enter a Google Apps Script Webhook URL first.', true);
+          return;
+        }
+        testDriveBtn.disabled = true;
+        testDriveBtn.textContent = 'Testing...';
+        try {
+          const uploader = window.JitsiDriveUploader;
+          if (!uploader) throw new Error('Drive uploader module not loaded.');
+          const testRes = await uploader.uploadPackage({
+            credentials: { webhookUrl: url },
+            folderName: accounts[activeAccIdx]?.folderName || 'meetingRecords',
+            roomName: 'Diagnostic_Test',
+            markdownText: '# Webhook Connection Verification\n\nGoogle Drive Webhook connected successfully from Meetings_AI Assistant.',
+            markdownFileName: 'Webhook_Verification_Test.md',
+            syncMode: 'notes_only'
+          });
+          if (testRes.success) {
+            showToast(`✅ Connected! Webhook verified (${testRes.folderId ? 'Folder: ' + testRes.folderId.slice(0, 8) + '...' : 'Ready'}).`);
+          } else {
+            throw new Error(testRes.error || testRes.message || 'Webhook test failed');
+          }
+        } catch (err) {
+          showToast(`❌ ${err.message || 'Drive test failed'}`, true);
+        } finally {
+          testDriveBtn.disabled = false;
+          testDriveBtn.textContent = '🔔 Test Webhook';
+        }
+      };
+    }
+
+    const retryFailedBtn = getEl('jitsiRetryFailedBlocksBtn');
+    if (retryFailedBtn) retryFailedBtn.onclick = retryAllFailedBlocks;
+
     updateAccountUI();
     updateAiKeyDisplay();
+    updateSlackUI();
     checkAndDisplayRecovery();
   }
 
