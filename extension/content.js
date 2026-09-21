@@ -20,9 +20,10 @@
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
   const GEMINI_CASCADE = [
     'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
+    'gemini-2.5-flash',
     'gemini-1.5-flash',
-    'gemini-1.5-flash-8b'
+    'gemini-1.5-flash-8b',
+    'gemini-2.0-flash'
   ];
 
   const DEFAULT_ACCOUNTS = [
@@ -46,28 +47,18 @@
     }
   ];
 
-  function sanitizeAccounts(accs) {
-    if (!Array.isArray(accs)) return DEFAULT_ACCOUNTS;
-    return accs.map(acc => {
-      const copy = { ...acc };
-      // Strip legacy placeholder mock strings so fields are clean
-      if (copy.clientId === 'primary-drive-user@gmail.com' || copy.clientId === 'backup-drive-user@gmail.com' || copy.clientId === 'your.name@gmail.com') {
-        copy.clientId = '';
-      }
-      if (copy.clientSecret === '••••••••••••••••••••') {
-        copy.clientSecret = '';
-      }
-      if (copy.folderName === 'Jitsi_Meetings') copy.folderName = 'meetingRecords';
-      if (copy.folderName === 'Jitsi_Meetings_Archive') copy.folderName = 'meetingRecords_Archive';
-      return copy;
-    });
-  }
-
   let accounts = DEFAULT_ACCOUNTS;
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      accounts = sanitizeAccounts(JSON.parse(saved));
+      accounts = JSON.parse(saved);
+      // Clean legacy placeholder mock strings
+      accounts.forEach(acc => {
+        if (acc.clientId === 'primary-drive-user@gmail.com' || acc.clientId === 'backup-drive-user@gmail.com') acc.clientId = '';
+        if (acc.clientSecret === '••••••••••••••••••••') acc.clientSecret = '';
+        if (acc.folderName === 'Jitsi_Meetings') acc.folderName = 'meetingRecords';
+        if (acc.folderName === 'Jitsi_Meetings_Archive') acc.folderName = 'meetingRecords_Archive';
+      });
     }
   } catch (e) {
     accounts = DEFAULT_ACCOUNTS;
@@ -229,7 +220,7 @@
         area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY, STORAGE_MIC_MODE_KEY, STORAGE_SLACK_WEBHOOK_KEY, STORAGE_SLACK_AUTO_KEY], (res) => {
           if (!res) return;
           if (res[STORAGE_AI_KEY]) geminiApiKey = res[STORAGE_AI_KEY].trim();
-          if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = sanitizeAccounts(res[STORAGE_KEY]);
+          if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = res[STORAGE_KEY];
           if (typeof res[STORAGE_ACTIVE_KEY] === 'number') activeAccIdx = res[STORAGE_ACTIVE_KEY];
           if (res[STORAGE_CHUNK_DURATION_KEY]) {
             savedBlockDurationMins = Number(res[STORAGE_CHUNK_DURATION_KEY]) || 5;
@@ -344,90 +335,6 @@
   }
 
   // --------------------------------------------------------------------------
-  // Speaker Identification & Participant Roster Engine
-  // --------------------------------------------------------------------------
-  function getMeetingParticipantRoster() {
-    const names = new Set();
-
-    // 1. Jitsi Meet Conference API
-    try {
-      if (typeof window !== 'undefined' && window.APP && window.APP.conference) {
-        const localName = window.APP.conference.getLocalDisplayName && window.APP.conference.getLocalDisplayName();
-        if (localName && localName.trim() && localName.toLowerCase() !== 'me') {
-          names.add(localName.trim());
-        }
-
-        const members = window.APP.conference.listMembers ? window.APP.conference.listMembers() : [];
-        members.forEach(m => {
-          const name = (m.getName && m.getName()) || (m.getDisplayName && m.getDisplayName());
-          if (name && name.trim()) names.add(name.trim());
-        });
-      }
-    } catch (e) {}
-
-    // 2. DOM Discovery (Jitsi & Google Meet)
-    try {
-      const elList = document.querySelectorAll(
-        '.displayname, [data-testid="participant-name"], [data-testid="local-display-name"], .localnick, .participant-name, [data-self-name]'
-      );
-      elList.forEach(el => {
-        const txt = (el.textContent || '').trim();
-        if (txt && txt.length > 1 && txt.length < 40 && !txt.includes('(') && !txt.toLowerCase().includes('mute')) {
-          names.add(txt);
-        }
-      });
-    } catch (e) {}
-
-    return Array.from(names);
-  }
-
-  function getCurrentSpeakerName() {
-    // 1. Check if meeting mic is unmuted and user voice is active
-    const isMicMuted = AudioMixer && AudioMixer.isMicMuted ? AudioMixer.isMicMuted() : false;
-
-    // 2. Check Jitsi active participant ID
-    try {
-      if (typeof window !== 'undefined' && window.APP && window.APP.conference) {
-        const activeId = window.APP.conference.getActiveParticipant && window.APP.conference.getActiveParticipant();
-        if (activeId) {
-          const activeName = window.APP.conference.getParticipantDisplayName && window.APP.conference.getParticipantDisplayName(activeId);
-          if (activeName && activeName.trim()) return activeName.trim();
-        }
-      }
-    } catch (e) {}
-
-    // 3. Check dominant speaker indicator in DOM
-    try {
-      const dominantEl = document.querySelector(
-        '.dominant-speaker .displayname, [data-testid="dominant-speaker"] .displayname, .active-speaker .displayname, div[data-is-active-speaker="true"]'
-      );
-      if (dominantEl) {
-        const dName = dominantEl.textContent.trim();
-        if (dName) return dName;
-      }
-    } catch (e) {}
-
-    // 4. If user mic is not muted, default to local participant's display name or 'You'
-    if (!isMicMuted) {
-      try {
-        if (window.APP && window.APP.conference && window.APP.conference.getLocalDisplayName) {
-          const loc = window.APP.conference.getLocalDisplayName();
-          if (loc && loc.trim()) return loc.trim();
-        }
-        const localEl = document.querySelector('.localnick, [data-testid="local-display-name"], [data-self-name]');
-        if (localEl && localEl.textContent.trim()) return localEl.textContent.trim();
-      } catch (e) {}
-      return 'You';
-    }
-
-    // 5. If user is muted, attribute to remote participant
-    const roster = getMeetingParticipantRoster();
-    if (roster.length > 0) return roster[0];
-
-    return 'Speaker';
-  }
-
-  // --------------------------------------------------------------------------
   // Live Speech-to-Text Recognizer
   // --------------------------------------------------------------------------
   let liveSTTRetryCount = 0;
@@ -461,13 +368,12 @@
             if (text.length > 1) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               const elapsedSec = meetingRecordingStartTime ? Math.round((Date.now() - meetingRecordingStartTime) / 1000) : 0;
-              const speaker = getCurrentSpeakerName();
-              liveCapturedTranscripts.push({ time: timeStr, elapsedSec, speaker, text });
+              liveCapturedTranscripts.push({ time: timeStr, elapsedSec, text });
               const tBox = getEl('jitsiTranscriptBox');
               if (tBox) {
                 const item = document.createElement('div');
                 item.style.marginBottom = '6px';
-                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:600;">[${timeStr}]</span> <span style="color:#34d399; font-weight:700; font-size:11px;">${UI.escapeHtml(speaker)}:</span> <span>${UI.escapeHtml(text)}</span>`;
+                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:600;">[${timeStr}]</span> <span>${UI.escapeHtml(text)}</span>`;
                 const ph = tBox.querySelector('em');
                 if (ph) ph.remove();
                 tBox.appendChild(item);
@@ -637,12 +543,10 @@
 
           // 2. Preemptively transcribe in background with Web Speech STT fallback
           const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
-          const participants = getMeetingParticipantRoster();
           Transcriber.transcribeSingleBlock(sealedBlock, {
             apiKey: activeKey,
             roomName: room,
-            liveTranscripts: liveCapturedTranscripts,
-            participants
+            liveTranscripts: liveCapturedTranscripts
           }).then((result) => {
             activeMeetingBlockTranscripts[sealedBlock.index] = result;
             if (result.isFailed) {
@@ -719,14 +623,12 @@
 
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
     const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
-    const participants = getMeetingParticipantRoster();
 
     try {
       const result = await Transcriber.transcribeSingleBlock(targetBlock, {
         apiKey: activeKey,
         roomName: room,
-        liveTranscripts: liveCapturedTranscripts,
-        participants
+        liveTranscripts: liveCapturedTranscripts
       });
 
       activeMeetingBlockTranscripts[blockIndex] = result;
@@ -809,14 +711,12 @@
       showToast(`✨ Fast-compiling ${logicalBlocks.length} audio block(s)...`);
 
       const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
-      const participants = getMeetingParticipantRoster();
       const transcriptionResult = await Transcriber.compilePreemptivelyTranscribedMeeting({
         blocks: logicalBlocks,
         precomputedTranscripts: activeMeetingBlockTranscripts,
         apiKey: activeKey,
         roomName: room,
         liveTranscripts: liveCapturedTranscripts,
-        participants,
         unifiedAudioBlob: compiledAudioBlob,
         forceRetry: forceRetry,
         onProgress: (pct, msg) => {
@@ -1420,14 +1320,6 @@
             <button id="jitsiTestDriveBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🔔 Test Webhook</button>
           </div>
         </div>
-
-        <div class="jitsi-ai-ext-section-title" style="margin-top:14px;">Troubleshooting &amp; Storage Reset</div>
-        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px; border-color:rgba(239,68,68,0.25);">
-          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
-            Wipes all cached API keys, webhooks, and account data from this browser profile so you can start completely fresh:
-          </p>
-          <button id="jitsiResetStorageBtn" class="jitsi-ai-ext-btn" style="background:rgba(239,68,68,0.2); color:#fca5a5; border:1px solid rgba(239,68,68,0.4); font-size:11px; width:100%;">🗑️ Clear All Stored Credentials &amp; Reset</button>
-        </div>
       </div>
 
       <!-- Upload Progress Overlay Box -->
@@ -1879,37 +1771,6 @@
 
     const retryFailedBtn = getEl('jitsiRetryFailedBlocksBtn');
     if (retryFailedBtn) retryFailedBtn.onclick = retryAllFailedBlocks;
-
-    const resetBtn = getEl('jitsiResetStorageBtn');
-    if (resetBtn) {
-      resetBtn.onclick = () => {
-        if (!confirm('Clear all stored credentials (API key, webhooks, drive settings) and reset to default?')) {
-          return;
-        }
-        try {
-          window.localStorage.removeItem(STORAGE_KEY);
-          window.localStorage.removeItem(STORAGE_ACTIVE_KEY);
-          window.localStorage.removeItem(STORAGE_AI_KEY);
-          window.localStorage.removeItem(STORAGE_CHUNK_DURATION_KEY);
-          window.localStorage.removeItem(STORAGE_DRIVE_SYNC_MODE_KEY);
-          window.localStorage.removeItem(STORAGE_MIC_MODE_KEY);
-          window.localStorage.removeItem(STORAGE_SLACK_WEBHOOK_KEY);
-          window.localStorage.removeItem(STORAGE_SLACK_AUTO_KEY);
-          if (typeof chrome !== 'undefined' && chrome.storage) {
-            if (chrome.storage.local) chrome.storage.local.clear();
-            if (chrome.storage.sync) chrome.storage.sync.clear();
-          }
-        } catch (e) {}
-        geminiApiKey = '';
-        accounts = DEFAULT_ACCOUNTS;
-        savedSlackWebhookUrl = '';
-        savedSlackAutoShare = false;
-        updateAccountUI();
-        updateAiKeyDisplay();
-        updateSlackUI();
-        showToast('🗑️ All stored credentials and cache wiped clean!');
-      };
-    }
 
     updateAccountUI();
     updateAiKeyDisplay();

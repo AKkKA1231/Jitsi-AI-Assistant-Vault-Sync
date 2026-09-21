@@ -20,9 +20,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'GEMINI_TEST_KEY' || request.type === 'GEMINI_TEST_KEY') {
+  if (request.action === 'GEMINI_TEST_KEY') {
     handleGeminiTestKey(request)
-      .then(result => sendResponse({ success: true, data: result, model: result.modelUsed }))
+      .then(result => sendResponse({ success: true, data: result }))
       .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
     return true;
   }
@@ -344,17 +344,19 @@ const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMIN
 // gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
 const ACTIVE_GEMINI_MODELS = [
   'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
+  'gemini-2.5-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-flash-8b'
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash'
 ];
 
 // Compatibility cascade for text synthesis & summaries
 const GEMINI_MODELS = [
   'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
+  'gemini-2.5-flash',
   'gemini-1.5-flash',
-  'gemini-1.5-flash-8b'
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash'
 ];
 
 let lastWorkingAudioModel = null;
@@ -414,7 +416,7 @@ async function fetchWithBackoff(url, options, maxRetries = 1) {
   }
 }
 
-async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName, participants = [] }) {
+async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName }) {
   let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
   if (!activeKey) {
@@ -424,18 +426,13 @@ async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomNa
     throw new Error('No audio data provided to transcribe.');
   }
 
-  const rosterClause = (Array.isArray(participants) && participants.length > 0)
-    ? `Meeting participants on this call: ${participants.join(', ')}. Attribute speech to each participant by name.`
-    : `Tag each speaker's real name before their speech (or Speaker 1, Speaker 2 if names are unmentioned).`;
-
   const promptText = `You are an expert executive meeting transcriber and secretary. 
 Listen carefully to this entire meeting audio recording (${roomName || 'Meeting'}).
-${rosterClause}
 
 Produce a structured markdown output with the following exact sections:
 
 ## 📝 Verbatim Spoken Transcript
-Write the full transcript of what was spoken by all participants. EVERY line of speech MUST have the speaker's name tagged before their words (e.g. [00:05] Speaker Name: "...", [00:22] Other Speaker: "..."). Make sure all technical words, discussions, and decisions are accurately captured.
+Write the full transcript of what was spoken by all participants with accurate timestamps and speaker identification (e.g. [00:05] Speaker 1: "...", [00:22] Speaker 2: "..."). Make sure all technical words, discussions, and decisions are accurately captured.
 
 ## 🎯 Key Decisions
 List all key decisions, agreements, or conclusions made during the session as bullet points.
@@ -545,7 +542,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
 /**
  * Transcribes an individual 3-5 minute audio chunk
  */
-async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName, participants = [] }) {
+async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName }) {
   let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
   if (!activeKey) {
@@ -555,15 +552,10 @@ async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, c
     return { chunkIndex, transcript: '' };
   }
 
-  const rosterClause = (Array.isArray(participants) && participants.length > 0)
-    ? `Known meeting participants: ${participants.join(', ')}. Attribute speech accurately to the speaker by their name.`
-    : `Identify and tag the speaker's name before each line of speech.`;
-
   const promptText = `You are a high-accuracy meeting transcriber.
 This is Audio Segment #${chunkIndex + 1} of ${totalChunks} (Time window: ${startTime || '00:00'} - ${endTime || '00:00'}) for meeting room "${roomName || 'Meeting'}".
-${rosterClause}
-Transcribe this entire audio segment verbatim. Every line of speech MUST have the speaker's name tagged before what was spoken (e.g. [${startTime || '00:00'}] Speaker Name: "...").
-Return ONLY the timestamped speaker-tagged transcript text. Do not add conversational intro/outro.`;
+Transcribe this entire audio segment verbatim with speaker identification and timestamps.
+Return ONLY the timestamped transcript text. Do not add conversational intro/outro.`;
 
   const payload = {
     contents: [
@@ -643,12 +635,13 @@ async function handleGeminiTestKey({ apiKey }) {
     contents: [{ parts: [{ text: 'Hello, respond with: OK' }] }]
   };
 
-  // Test against active lifetime free tier models prioritized for speed and lowest 503 errors
+  // Test against lifetime free tier models prioritized for speed and lowest 503 errors
   const testModels = [
     'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
+    'gemini-2.5-flash',
     'gemini-1.5-flash',
-    'gemini-1.5-flash-8b'
+    'gemini-1.5-flash-8b',
+    'gemini-2.0-flash'
   ];
 
   let lastErr = null;
@@ -708,30 +701,25 @@ async function handleGeminiTestKey({ apiKey }) {
 /**
  * Synthesizes combined chunk transcripts into Executive Minutes
  */
-async function handleGeminiSynthesizeSummary({ apiKey, fullTranscriptText, roomName, participants = [] }) {
+async function handleGeminiSynthesizeSummary({ apiKey, fullTranscriptText, roomName }) {
   let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
   if (!activeKey) {
     throw new Error('No Gemini API key provided.');
   }
 
-  const rosterClause = (Array.isArray(participants) && participants.length > 0)
-    ? `Meeting participants: ${participants.join(', ')}.`
-    : ``;
-
   const promptText = `You are an executive meeting secretary.
-Below is the complete verbatim transcript with speaker tags from meeting "${roomName || 'Meeting'}".
-${rosterClause}
+Below is the complete verbatim transcript from meeting "${roomName || 'Meeting'}".
 
 Full Transcript:
 ${fullTranscriptText}
 
 Based on this transcript, generate:
 ## 🎯 Key Decisions
-- List every confirmed decision or consensus point, noting who decided/proposed it if known.
+- List every confirmed decision or consensus point.
 
 ## ✅ Action Items & Owners
-- [ ] List each actionable task with owner name and deadline if mentioned (e.g. - [ ] Task description (Owner)).
+- [ ] List each actionable task with owner and deadline if mentioned.
 
 ## 📌 Executive Summary
 A crisp 3-sentence summary of the discussion.`;

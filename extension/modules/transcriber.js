@@ -77,13 +77,13 @@
     });
 
     if (matched.length > 0) {
-      return matched.map(m => `[${m.time || block.startTime}] ${m.speaker ? m.speaker + ': ' : ''}${m.text}`).join('\n');
+      return matched.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
     }
 
     // If items lack elapsedSec or only 1 block exists, provide captured transcript
     if (liveTranscripts.length > 0) {
       if (block.index === 1 && (!block.totalBlocks || block.totalBlocks === 1)) {
-        return liveTranscripts.map(m => `[${m.time || block.startTime}] ${m.speaker ? m.speaker + ': ' : ''}${m.text}`).join('\n');
+        return liveTranscripts.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
       }
       // If timestamps not indexed, distribute across blocks proportionally
       const totalBlocks = block.totalBlocks || 2;
@@ -91,7 +91,7 @@
       const startIdx = (block.index - 1) * chunkSize;
       const slice = liveTranscripts.slice(startIdx, startIdx + chunkSize);
       if (slice.length > 0) {
-        return slice.map(m => `[${m.time || block.startTime}] ${m.speaker ? m.speaker + ': ' : ''}${m.text}`).join('\n');
+        return slice.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
       }
     }
 
@@ -101,7 +101,7 @@
   /**
    * Preemptively transcribes a single 3-6 minute audio block in background
    */
-  async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [], participants = [] } = {}) {
+  async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [] } = {}) {
     if (!block || !block.blob) {
       return { index: block ? block.index : 0, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '', isFailed: true };
     }
@@ -152,8 +152,7 @@
               totalChunks: 1,
               startTime: block.startTime,
               endTime: block.endTime,
-              roomName: roomName || 'meeting',
-              participants: participants || []
+              roomName: roomName || 'meeting'
             }, (res) => {
               if (chrome.runtime.lastError) {
                 reject(new Error(chrome.runtime.lastError.message));
@@ -230,7 +229,6 @@
     apiKey,
     roomName,
     liveTranscripts = [],
-    participants = [],
     unifiedAudioBlob = null,
     forceRetry = false,
     onProgress
@@ -253,7 +251,7 @@
     if (pendingBlocks.length > 0) {
       if (onProgress) onProgress(20, `Transcribing ${pendingBlocks.length} pending meeting block(s)...`);
       await runConcurrentPool(pendingBlocks, 2, async (block) => {
-        const res = await transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts, participants });
+        const res = await transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts });
         precomputedTranscripts[block.index] = res;
       });
     }
@@ -279,7 +277,7 @@
     if (!hasDialogue && Array.isArray(liveTranscripts) && liveTranscripts.length > 0) {
       console.log('[Transcriber] Incorporating full browser Live STT log into meeting transcript...');
       combinedTranscript = `### ⏱️ Spoken Dialogue (Captured Speech Engine)\n\n` +
-        liveTranscripts.map(t => `[${t.time || '00:00'}] ${t.speaker ? t.speaker + ': ' : ''}${t.text}`).join('\n') + `\n\n` + combinedTranscript;
+        liveTranscripts.map(t => `[${t.time || '00:00'}] ${t.text}`).join('\n') + `\n\n` + combinedTranscript;
     }
 
     // Zero-Loss Audio Safety Net: If preemptive chunking produced incomplete speech,
@@ -299,8 +297,7 @@
               apiKey,
               base64Audio: unifiedBase64,
               mimeType: unifiedAudioBlob.type || 'audio/webm',
-              roomName: roomName || 'meeting',
-              participants: participants || []
+              roomName: roomName || 'meeting'
             }, (res) => {
               if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
               else if (res && res.success) resolve(res.data);
@@ -336,8 +333,7 @@
             action: 'GEMINI_SYNTHESIZE_SUMMARY',
             apiKey,
             fullTranscriptText: combinedTranscript,
-            roomName: roomName || 'meeting',
-            participants: participants || []
+            roomName: roomName || 'meeting'
           }, (res) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message));

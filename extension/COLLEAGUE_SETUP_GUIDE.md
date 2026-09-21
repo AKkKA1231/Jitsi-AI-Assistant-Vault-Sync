@@ -41,13 +41,10 @@ When you join any [meet.jit.si](https://meet.jit.si) meeting, this extension aut
 4. Select the extracted folder containing `manifest.json`.
 5. 🎉 **Done!** You will immediately see **"Meetings_AI Assistant & Drive Sync"** loaded with an active green status.
 
-> ⚠️ **CRITICAL BROWSER REFRESH STEP:**  
-> If you already had a Jitsi meeting tab (`https://meet.jit.si/...`) open before loading or reloading the extension, you **MUST refresh the meeting tab (`F5` or `Ctrl+R`)**! Browsers cannot inject newly installed or reloaded extensions into tabs opened prior to installation.
-
 ---
 
 ### Step 3: Enter & Test Your Lifetime Free Gemini API Key
-The assistant uses Google's high-speed, lifetime free tier multimodal Gemini models (`gemini-2.0-flash-lite`, `gemini-2.0-flash`, `gemini-1.5-flash`, `gemini-1.5-flash-8b`):
+The assistant uses Google's high-speed, lifetime free tier multimodal Gemini models (`gemini-2.0-flash-lite`, `gemini-2.5-flash`, `gemini-1.5-flash`):
 
 1. Get a 100% lifetime free API key in 30 seconds from [Google AI Studio](https://aistudio.google.com/app/apikey) (no credit card required).
 2. Click the extension icon in your browser toolbar to open the quick popup.
@@ -169,9 +166,6 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
 
 **Q: Where is my data stored?**  
 **A:** Everything stays local in your browser's IndexedDB storage until you choose to upload it to your own personal Google Drive or download it as Markdown.
-
-**Q: Why did credentials or old settings look pre-filled when I reloaded the extension?**  
-**A:** Chrome preserves its internal database (`chrome.storage` and domain `localStorage`) even if you delete and redownload the `.zip` archive! To start completely fresh with clean inputs, click the **"🗑️ Clear All Stored Credentials & Reset"** button in the extension's **Settings** tab (or in the browser toolbar popup). This immediately wipes all cached test data and resets all fields to clean defaults.
 
 **Q: The microphone is not transcribing?**  
 **A:** Make sure you clicked "Allow" when the browser asked for microphone permissions for `meet.jit.si`. Chrome's built-in Web Speech API requires an active microphone.

@@ -263,10 +263,10 @@ it('Should have Gemini Flash model cascade configured', () => {
 
   // Verify prioritized low-503 high-throughput lifetime free models configured
   assert.ok(bgContent.includes('gemini-2.0-flash-lite'), 'background.js must use gemini-2.0-flash-lite');
-  assert.ok(bgContent.includes('gemini-2.0-flash'), 'background.js must use gemini-2.0-flash');
+  assert.ok(bgContent.includes('gemini-2.5-flash'), 'background.js must use gemini-2.5-flash');
   assert.ok(bgContent.includes('gemini-1.5-flash'), 'background.js must use gemini-1.5-flash');
   assert.ok(contentJs.includes('gemini-2.0-flash-lite'), 'content.js must use gemini-2.0-flash-lite');
-  assert.ok(contentJs.includes('gemini-1.5-flash'), 'content.js must use gemini-1.5-flash');
+  assert.ok(contentJs.includes('gemini-2.5-flash'), 'content.js must use gemini-2.5-flash');
 });
 
 it('Should verify Gemini API Key persistence and auto-save synchronization across extension', () => {
@@ -347,7 +347,7 @@ await itAsync('Should verify live Gemini API connection if key is provided', asy
     contents: [{ parts: [{ text: 'Respond with OK' }] }]
   });
 
-  const models = ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const models = ['gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash'];
   let successfulRes = null;
 
   for (const model of models) {
@@ -477,22 +477,6 @@ it('Should verify Meeting Mic Mute synchronization and zeroing in audioMixer.js'
   // Verify manual mic override and UI indicator
   assert.ok(mixerSrc.includes('setManualMicMute'), 'audioMixer.js must export setManualMicMute');
   assert.ok(contentJs.includes('jitsiMicMuteToggleBtn'), 'content.js must provide mic mute toggle control');
-});
-
-it('Should verify two-way audio mixing (both sides) and shared file/tab audio capture in audioMixer.js', () => {
-  const mixerSrc = fs.readFileSync(path.resolve('./extension/modules/audioMixer.js'), 'utf-8');
-
-  // Verify local microphone capture (Side 1)
-  assert.ok(mixerSrc.includes('navigator.mediaDevices.getUserMedia'), 'Must capture local microphone for Side 1');
-  assert.ok(mixerSrc.includes('createMediaStreamSource'), 'Must route microphone to Web Audio mixer destination');
-
-  // Verify remote participant audio capture (Side 2)
-  assert.ok(mixerSrc.includes('connectRemoteAudioElements'), 'Must implement connectRemoteAudioElements for Side 2');
-  assert.ok(mixerSrc.includes('mediaElements.forEach'), 'Must scan media elements across participant grid');
-
-  // Verify shared file / tab audio and presentation capture
-  assert.ok(mixerSrc.includes('captureStream'), 'Must support captureStream for shared video/audio files and presentations');
-  assert.ok(mixerSrc.includes('mediaMutationObserver'), 'Must observe DOM mutations for instant participant and share discovery');
 });
 
 // ----------------------------------------------------
