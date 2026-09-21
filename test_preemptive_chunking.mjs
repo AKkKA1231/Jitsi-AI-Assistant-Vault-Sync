@@ -338,13 +338,14 @@ console.log('\n--- Test Group 9: Multimodal Audio Model Cascade Priority & Diagn
   const bgCode = fs.readFileSync(path.resolve('./extension/background.js'), 'utf-8');
   const contentCode = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
 
-  // Verify gemini-2.0-flash is deprioritized after higher availability models
-  assert.ok(bgCode.includes("'gemini-2.5-flash'"), 'Must include gemini-2.5-flash in active models');
-  assert.ok(bgCode.includes("'gemini-2.0-flash-lite'"), 'Must include gemini-2.0-flash-lite in active models');
+  // Verify active lifetime free models prioritized for high throughput and low 503 errors
+  assert.ok(bgCode.includes("'gemini-3.1-flash-lite'"), 'Must include gemini-3.1-flash-lite in active models');
+  assert.ok(bgCode.includes("'gemini-3.6-flash'"), 'Must include gemini-3.6-flash in active models');
+  assert.ok(bgCode.includes("'gemini-flash-latest'"), 'Must include gemini-flash-latest in active models');
 
-  const flash20Index = bgCode.indexOf("'gemini-2.0-flash'");
-  const flashLiteIndex = bgCode.indexOf("'gemini-2.0-flash-lite'");
-  assert.ok(flashLiteIndex < flash20Index, 'gemini-2.0-flash must have lower priority than high-availability flash-lite to avoid 503 errors');
+  // Verify discontinued models are removed
+  assert.ok(!bgCode.includes("'gemini-1.5-flash'"), 'Must not include retired 1.5-flash');
+  assert.ok(!bgCode.includes("'gemini-2.0-flash'"), 'Must not include retired 2.0-flash');
 
   // Verify GEMINI_TEST_KEY diagnostic support
   // Verify sticky working audio model caching

@@ -133,7 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'GEMINI_TEST_KEY', apiKey: val }, (resp) => {
+        chrome.runtime.sendMessage({ action: 'GEMINI_TEST_KEY', type: 'GEMINI_TEST_KEY', apiKey: val }, (resp) => {
           testGeminiBtn.disabled = false;
           testGeminiBtn.textContent = 'Test';
           if (chrome.runtime.lastError || !resp || !resp.success) {
@@ -145,8 +145,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             alert(`❌ Gemini API Key Test Failed:\n${err}`);
           } else {
-            setKeyStatus(true, `✅ Connected: ${resp.model} (Free Tier)`);
-            alert(`✅ Gemini API Key is Valid!\nModel Connected: ${resp.model}\nFree tier active & ready for Jitsi recordings.`);
+            const connectedModel = resp.model || resp.data?.modelUsed || 'gemini-3.1-flash-lite';
+            setKeyStatus(true, `✅ Connected: ${connectedModel} (Free Tier)`);
+            alert(`✅ Gemini API Key is Valid!\nModel Connected: ${connectedModel}\nFree tier active & ready for Jitsi recordings.`);
           }
         });
       } else {

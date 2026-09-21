@@ -44,12 +44,12 @@ When you join any [meet.jit.si](https://meet.jit.si) meeting, this extension aut
 ---
 
 ### Step 3: Enter & Test Your Lifetime Free Gemini API Key
-The assistant uses Google's high-speed, lifetime free tier multimodal Gemini models (`gemini-2.0-flash-lite`, `gemini-2.5-flash`, `gemini-1.5-flash`):
+The assistant uses Google's high-speed, lifetime free tier multimodal Gemini models (`gemini-3.1-flash-lite`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-flash-latest`):
 
 1. Get a 100% lifetime free API key in 30 seconds from [Google AI Studio](https://aistudio.google.com/app/apikey) (no credit card required).
 2. Click the extension icon in your browser toolbar to open the quick popup.
 3. Paste your key in the **Gemini API Key** box and click **Test**.
-4. You will see: `✅ Connected: gemini-2.0-flash-lite (Free Tier)`.
+4. You will see: `✅ Connected: gemini-3.1-flash-lite (Free Tier)`.
 5. Click **Save**. Your key is saved locally in `chrome.storage.local` across all your calls.
 
 ---
