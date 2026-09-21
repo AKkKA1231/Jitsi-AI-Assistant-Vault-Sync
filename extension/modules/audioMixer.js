@@ -23,6 +23,7 @@
   let connectedAudioElements = new Set();
   let connectedStreamIds = new Set();
   let remotePollInterval = null;
+  let mediaMutationObserver = null;
   let hasAttachedWindowListeners = false;
 
   // VAD state
@@ -212,9 +213,32 @@
     // 2. Discover Remote Participant Audio immediately
     connectRemoteAudioElements();
 
-    // 3. Periodic participant check every 2.5 seconds (0% CPU impact, no DOM recursion, robust multi-participant pickup)
+    // 3. Periodic participant check every 2.0 seconds + MutationObserver for instant 0ms pickup
     if (remotePollInterval) clearInterval(remotePollInterval);
-    remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
+    remotePollInterval = setInterval(connectRemoteAudioElements, 2000);
+
+    if (typeof MutationObserver !== 'undefined' && !mediaMutationObserver && typeof document !== 'undefined' && document.body) {
+      try {
+        mediaMutationObserver = new MutationObserver((mutations) => {
+          let hasMedia = false;
+          for (const mut of mutations) {
+            if (mut.addedNodes && mut.addedNodes.length > 0) {
+              for (const node of mut.addedNodes) {
+                if (node.nodeName === 'AUDIO' || node.nodeName === 'VIDEO' || (node.querySelector && node.querySelector('audio, video'))) {
+                  hasMedia = true;
+                  break;
+                }
+              }
+            }
+            if (hasMedia) break;
+          }
+          if (hasMedia) {
+            connectRemoteAudioElements();
+          }
+        });
+        mediaMutationObserver.observe(document.body, { childList: true, subtree: true });
+      } catch (e) {}
+    }
 
     // 4. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
     if (typeof window !== 'undefined' && !hasAttachedWindowListeners) {
@@ -243,7 +267,15 @@
         return;
       }
 
-      const srcObj = mediaEl.srcObject;
+      let srcObj = mediaEl.srcObject;
+      // Also check if media element has captureStream (for shared audio/video files or presentations)
+      if (!srcObj) {
+        if (typeof mediaEl.captureStream === 'function') {
+          try { srcObj = mediaEl.captureStream(); } catch (e) {}
+        } else if (typeof mediaEl.mozCaptureStream === 'function') {
+          try { srcObj = mediaEl.mozCaptureStream(); } catch (e) {}
+        }
+      }
       if (!srcObj || typeof srcObj.getAudioTracks !== 'function') return;
 
       const audioTracks = srcObj.getAudioTracks();
@@ -270,6 +302,27 @@
         console.warn('[Audio Mixer] Remote audio connect notice:', e.message);
       }
     });
+
+    // Also discover Jitsi Conference audio tracks directly from conference object
+    if (typeof window !== 'undefined' && window.APP && window.APP.conference && typeof window.APP.conference.getRemoteTracks === 'function') {
+      try {
+        const remoteTracks = window.APP.conference.getRemoteTracks();
+        for (const rTrack of remoteTracks) {
+          if (rTrack && typeof rTrack.getType === 'function' && rTrack.getType() === 'audio') {
+            const stream = (typeof rTrack.getOriginalStream === 'function') ? rTrack.getOriginalStream() : rTrack.stream;
+            if (stream && !connectedStreamIds.has(stream.id) && typeof stream.getAudioTracks === 'function' && stream.getAudioTracks().length > 0) {
+              try {
+                const remoteSource = audioCtx.createMediaStreamSource(stream);
+                remoteSource.connect(analyser);
+                connectedStreamIds.add(stream.id);
+                remoteCount++;
+                console.log('[Audio Mixer] Connected Jitsi conference audio track:', stream.id);
+              } catch (e) {}
+            }
+          }
+        }
+      } catch (e) {}
+    }
 
     const badge = document.getElementById('jitsiSpeakerCountBadge');
     if (badge) {
@@ -380,6 +433,10 @@
     if (remotePollInterval) {
       clearInterval(remotePollInterval);
       remotePollInterval = null;
+    }
+    if (mediaMutationObserver) {
+      mediaMutationObserver.disconnect();
+      mediaMutationObserver = null;
     }
     if (micStream) {
       micStream.getTracks().forEach(t => t.stop());

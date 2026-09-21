@@ -483,6 +483,22 @@ it('Should verify Meeting Mic Mute synchronization and zeroing in audioMixer.js'
   assert.ok(contentJs.includes('jitsiMicMuteToggleBtn'), 'content.js must provide mic mute toggle control');
 });
 
+it('Should verify two-way audio mixing (both sides) and shared file/tab audio capture in audioMixer.js', () => {
+  const mixerSrc = fs.readFileSync(path.resolve('./extension/modules/audioMixer.js'), 'utf-8');
+
+  // Verify local microphone capture (Side 1)
+  assert.ok(mixerSrc.includes('navigator.mediaDevices.getUserMedia'), 'Must capture local microphone for Side 1');
+  assert.ok(mixerSrc.includes('createMediaStreamSource'), 'Must route microphone to Web Audio mixer destination');
+
+  // Verify remote participant audio capture (Side 2)
+  assert.ok(mixerSrc.includes('connectRemoteAudioElements'), 'Must implement connectRemoteAudioElements for Side 2');
+  assert.ok(mixerSrc.includes('mediaElements.forEach'), 'Must scan media elements across participant grid');
+
+  // Verify shared file / tab audio and presentation capture
+  assert.ok(mixerSrc.includes('captureStream'), 'Must support captureStream for shared video/audio files and presentations');
+  assert.ok(mixerSrc.includes('mediaMutationObserver'), 'Must observe DOM mutations for instant participant and share discovery');
+});
+
 // ----------------------------------------------------
 // Results Summary
 // ----------------------------------------------------
