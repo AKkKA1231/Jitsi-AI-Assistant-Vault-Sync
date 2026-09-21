@@ -156,6 +156,28 @@ If you want meeting notes and audio recordings automatically uploaded to your Go
 
 ---
 
+## 🔒 Browser Permission Checklist (Why It Runs on One PC but Fails on Another)
+
+If the extension works on one system but fails on another, the difference is almost always **Browser or Operating System Microphone Permissions**:
+
+1. **Browser Address Bar Site Permission**:
+   - While in your Jitsi call, click the **tune / slider icon (⚙️ or 🔒)** on the left edge of Chrome's address bar.
+   - Ensure **Microphone** is explicitly set to **Allow** (not "Block" or "Ask").
+   - If it was blocked, toggle it to "Allow" and press **`Ctrl + F5`**.
+
+2. **Windows / macOS System Microphone Privacy**:
+   - **Windows**: Open **Start** &rarr; **Settings** &rarr; **Privacy & security** &rarr; **Microphone**.
+     - Turn **"Microphone access"** **ON**.
+     - Turn **"Let desktop apps access your microphone"** **ON** (verify Google Chrome is enabled).
+   - **macOS**: Go to **System Settings** &rarr; **Privacy & Security** &rarr; **Microphone** and ensure Google Chrome is checked.
+
+3. **Browser Compatibility**:
+   - **Google Chrome** and **Microsoft Edge**: Fully supported out of the box.
+   - **Brave Browser**: Brave's Shields block speech recognition by default. In Brave, go to `brave://settings/privacy` and enable *"Use Google services for speech recognition"*.
+   - **Firefox**: Firefox does not support Web Speech recognition natively. Use Chrome or Edge.
+
+---
+
 ## ❓ Frequently Asked Questions (FAQ)
 
 **Q: Does this cost anything?**  

@@ -392,6 +392,7 @@
         }
         // Gracefully halt retries if permission is unavailable
         if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
+          showToast('⚠️ Speech recognition blocked by browser! Check microphone permissions in address bar.', true);
           liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
           return;
         }
@@ -510,6 +511,12 @@
       }
       const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'));
       AudioMixer.initVAD(() => Recorder.isCurrentlyRecording());
+      if (AudioMixer.getMicStatus) {
+        const micStat = AudioMixer.getMicStatus();
+        if (!micStat.connected && micStat.error) {
+          showToast('⚠️ Microphone blocked by browser! Click the lock/tune icon in your address bar to Allow microphone.', true);
+        }
+      }
 
       liveCapturedTranscripts = [];
       const tBox = getEl('jitsiTranscriptBox');

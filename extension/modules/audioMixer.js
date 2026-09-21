@@ -20,6 +20,7 @@
   let isLocalMicMuted = false;
   let manualMicMuteOverride = false;
   let autoMuteSyncEnabled = true;
+  let lastMicError = null;
   let connectedAudioElements = new Set();
   let connectedStreamIds = new Set();
   let remotePollInterval = null;
@@ -196,6 +197,7 @@
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
       });
+      lastMicError = null;
       const micSource = audioCtx.createMediaStreamSource(micStream);
       micGainNode = audioCtx.createGain();
       micGainNode.gain.setValueAtTime(1, audioCtx.currentTime);
@@ -206,6 +208,7 @@
       // Check initial state
       syncLocalMicState();
     } catch (err) {
+      lastMicError = err;
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
 
@@ -407,6 +410,10 @@
     },
     getAutoMuteSync: () => autoMuteSyncEnabled,
     syncLocalMicState,
+    getMicStatus: () => ({
+      connected: Boolean(micStream),
+      error: lastMicError
+    }),
     getStats: () => ({
       activeSpeechDurationSec,
       silenceDurationSec,
