@@ -29,8 +29,8 @@
     {
       id: 'acc_1',
       name: 'Account 1 (Primary Drive)',
-      clientId: 'primary-drive-user@gmail.com',
-      clientSecret: '••••••••••••••••••••',
+      clientId: '',
+      clientSecret: '',
       folderName: 'meetingRecords',
       webhookUrl: '',
       token: ''
@@ -38,24 +38,36 @@
     {
       id: 'acc_2',
       name: 'Account 2 (Backup Drive)',
-      clientId: 'backup-drive-user@gmail.com',
-      clientSecret: '••••••••••••••••••••',
+      clientId: '',
+      clientSecret: '',
       folderName: 'meetingRecords_Archive',
       webhookUrl: '',
       token: ''
     }
   ];
 
+  function sanitizeAccounts(accs) {
+    if (!Array.isArray(accs)) return DEFAULT_ACCOUNTS;
+    return accs.map(acc => {
+      const copy = { ...acc };
+      // Strip legacy placeholder mock strings so fields are clean
+      if (copy.clientId === 'primary-drive-user@gmail.com' || copy.clientId === 'backup-drive-user@gmail.com' || copy.clientId === 'your.name@gmail.com') {
+        copy.clientId = '';
+      }
+      if (copy.clientSecret === '••••••••••••••••••••') {
+        copy.clientSecret = '';
+      }
+      if (copy.folderName === 'Jitsi_Meetings') copy.folderName = 'meetingRecords';
+      if (copy.folderName === 'Jitsi_Meetings_Archive') copy.folderName = 'meetingRecords_Archive';
+      return copy;
+    });
+  }
+
   let accounts = DEFAULT_ACCOUNTS;
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      accounts = JSON.parse(saved);
-      // Automatically migrate legacy default folder names
-      accounts.forEach(acc => {
-        if (acc.folderName === 'Jitsi_Meetings') acc.folderName = 'meetingRecords';
-        if (acc.folderName === 'Jitsi_Meetings_Archive') acc.folderName = 'meetingRecords_Archive';
-      });
+      accounts = sanitizeAccounts(JSON.parse(saved));
     }
   } catch (e) {
     accounts = DEFAULT_ACCOUNTS;
@@ -217,7 +229,7 @@
         area.get([STORAGE_AI_KEY, STORAGE_KEY, STORAGE_ACTIVE_KEY, STORAGE_CHUNK_DURATION_KEY, STORAGE_MIC_MODE_KEY, STORAGE_SLACK_WEBHOOK_KEY, STORAGE_SLACK_AUTO_KEY], (res) => {
           if (!res) return;
           if (res[STORAGE_AI_KEY]) geminiApiKey = res[STORAGE_AI_KEY].trim();
-          if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = res[STORAGE_KEY];
+          if (res[STORAGE_KEY] && Array.isArray(res[STORAGE_KEY])) accounts = sanitizeAccounts(res[STORAGE_KEY]);
           if (typeof res[STORAGE_ACTIVE_KEY] === 'number') activeAccIdx = res[STORAGE_ACTIVE_KEY];
           if (res[STORAGE_CHUNK_DURATION_KEY]) {
             savedBlockDurationMins = Number(res[STORAGE_CHUNK_DURATION_KEY]) || 5;
@@ -1408,6 +1420,14 @@
             <button id="jitsiTestDriveBtn" class="jitsi-ai-ext-btn jitsi-ai-ext-btn-secondary" style="flex:1; font-size:11px;">🔔 Test Webhook</button>
           </div>
         </div>
+
+        <div class="jitsi-ai-ext-section-title" style="margin-top:14px;">Troubleshooting &amp; Storage Reset</div>
+        <div class="jitsi-ai-ext-card jitsi-ai-card" style="margin-bottom:12px; border-color:rgba(239,68,68,0.25);">
+          <p style="font-size:11px; color:#94a3b8; margin:0 0 8px 0; line-height:1.4;">
+            Wipes all cached API keys, webhooks, and account data from this browser profile so you can start completely fresh:
+          </p>
+          <button id="jitsiResetStorageBtn" class="jitsi-ai-ext-btn" style="background:rgba(239,68,68,0.2); color:#fca5a5; border:1px solid rgba(239,68,68,0.4); font-size:11px; width:100%;">🗑️ Clear All Stored Credentials &amp; Reset</button>
+        </div>
       </div>
 
       <!-- Upload Progress Overlay Box -->
@@ -1859,6 +1879,37 @@
 
     const retryFailedBtn = getEl('jitsiRetryFailedBlocksBtn');
     if (retryFailedBtn) retryFailedBtn.onclick = retryAllFailedBlocks;
+
+    const resetBtn = getEl('jitsiResetStorageBtn');
+    if (resetBtn) {
+      resetBtn.onclick = () => {
+        if (!confirm('Clear all stored credentials (API key, webhooks, drive settings) and reset to default?')) {
+          return;
+        }
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+          window.localStorage.removeItem(STORAGE_ACTIVE_KEY);
+          window.localStorage.removeItem(STORAGE_AI_KEY);
+          window.localStorage.removeItem(STORAGE_CHUNK_DURATION_KEY);
+          window.localStorage.removeItem(STORAGE_DRIVE_SYNC_MODE_KEY);
+          window.localStorage.removeItem(STORAGE_MIC_MODE_KEY);
+          window.localStorage.removeItem(STORAGE_SLACK_WEBHOOK_KEY);
+          window.localStorage.removeItem(STORAGE_SLACK_AUTO_KEY);
+          if (typeof chrome !== 'undefined' && chrome.storage) {
+            if (chrome.storage.local) chrome.storage.local.clear();
+            if (chrome.storage.sync) chrome.storage.sync.clear();
+          }
+        } catch (e) {}
+        geminiApiKey = '';
+        accounts = DEFAULT_ACCOUNTS;
+        savedSlackWebhookUrl = '';
+        savedSlackAutoShare = false;
+        updateAccountUI();
+        updateAiKeyDisplay();
+        updateSlackUI();
+        showToast('🗑️ All stored credentials and cache wiped clean!');
+      };
+    }
 
     updateAccountUI();
     updateAiKeyDisplay();

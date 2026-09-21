@@ -10,23 +10,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
 
   let accounts = [
-    { id: 'acc_1', name: 'Account 1 (Primary Drive)', clientId: 'your.name@gmail.com', freeGb: 14.2 },
-    { id: 'acc_2', name: 'Account 2 (Backup Drive)', clientId: 'backup.drive@gmail.com', freeGb: 14.8 }
+    { id: 'acc_1', name: 'Account 1 (Primary Drive)', clientId: '', freeGb: null },
+    { id: 'acc_2', name: 'Account 2 (Backup Drive)', clientId: '', freeGb: null }
   ];
 
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) accounts = JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        accounts = parsed.map(a => {
+          const item = { ...a };
+          if (item.clientId === 'your.name@gmail.com' || item.clientId === 'backup.drive@gmail.com') {
+            item.clientId = '';
+          }
+          return item;
+        });
+      }
+    }
   } catch (e) {}
 
   let activeIdx = 0;
 
   function refreshDisplay() {
-    const cur = accounts[activeIdx];
+    const cur = accounts[activeIdx] || { clientId: '', freeGb: null };
     document.getElementById('popAccount').textContent = `Account ${activeIdx + 1}`;
-    document.getElementById('popEmail').textContent = cur.clientId || 'Not set';
-    document.getElementById('popFree').textContent = `${cur.freeGb || 15} GB free`;
-    document.getElementById('popupEmailInput').value = cur.clientId || '';
+    document.getElementById('popEmail').textContent = (cur.clientId && cur.clientId !== 'your.name@gmail.com') ? cur.clientId : 'Not configured';
+    document.getElementById('popFree').textContent = cur.freeGb ? `${cur.freeGb} GB free` : '--';
+    document.getElementById('popupEmailInput').value = (cur.clientId && cur.clientId !== 'your.name@gmail.com') ? cur.clientId : '';
   }
 
   refreshDisplay();
@@ -190,5 +201,31 @@ document.addEventListener('DOMContentLoaded', () => {
     activeIdx = activeIdx === 0 ? 1 : 0;
     refreshDisplay();
   });
+
+  const resetPopupBtn = document.getElementById('resetPopupBtn');
+  if (resetPopupBtn) {
+    resetPopupBtn.addEventListener('click', () => {
+      if (!confirm('Clear all stored credentials (API key, email, Drive settings) and reset?')) {
+        return;
+      }
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STORAGE_AI_KEY);
+        if (typeof chrome !== 'undefined' && chrome.storage) {
+          if (chrome.storage.local) chrome.storage.local.clear();
+          if (chrome.storage.sync) chrome.storage.sync.clear();
+        }
+      } catch (e) {}
+      accounts = [
+        { id: 'acc_1', name: 'Account 1 (Primary Drive)', clientId: '', freeGb: null },
+        { id: 'acc_2', name: 'Account 2 (Backup Drive)', clientId: '', freeGb: null }
+      ];
+      if (geminiInput) geminiInput.value = '';
+      setKeyStatus(false);
+      updateSttIndicator(false);
+      refreshDisplay();
+      alert('🗑️ Extension storage & cached credentials wiped clean!');
+    });
+  }
 });
 

@@ -80,11 +80,11 @@
     </div>
     <div class="row">
       <span>Email ID:</span>
-      <span class="val" id="popEmail" style="font-size:11px; max-width:180px; overflow:hidden; text-overflow:ellipsis;">your.name@gmail.com</span>
+      <span class="val" id="popEmail" style="font-size:11px; max-width:180px; overflow:hidden; text-overflow:ellipsis;">Not configured</span>
     </div>
     <div class="row">
       <span>Free Storage:</span>
-      <span class="val" id="popFree">14.2 GB free</span>
+      <span class="val" id="popFree">--</span>
     </div>
     <div class="row">
       <span>AI Speech STT:</span>
@@ -110,13 +110,14 @@
   <div style="margin-bottom:10px;">
     <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Update Your Gmail / Account ID:</label>
     <div style="display:flex; gap:6px;">
-      <input type="email" id="popupEmailInput" placeholder="your.name@gmail.com" style="flex:1; padding:6px 8px; border-radius:4px; background:#1e293b; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
+      <input type="email" id="popupEmailInput" placeholder="e.g. your.email@gmail.com" style="flex:1; padding:6px 8px; border-radius:4px; background:#1e293b; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
       <button id="savePopupEmailBtn" style="width:auto; margin:0; padding:6px 10px; background:#10b981; font-size:11px;">Save</button>
     </div>
   </div>
 
   <button id="openAppBtn">Open AI Workspace Dashboard</button>
   <button id="switchAccBtn" class="secondary-btn">Rotate Drive Account (1-Click)</button>
+  <button id="resetPopupBtn" class="secondary-btn" style="background:rgba(239,68,68,0.15); color:#fca5a5; border:1px solid rgba(239,68,68,0.3); margin-top:8px;">🗑️ Reset Stored Credentials &amp; Cache</button>
 
   <div class="help">
     💡 Works automatically on <strong>meet.jit.si</strong> and any custom <strong>jitsi.org</strong> room! Look for the floating button in the bottom right corner of the call.
