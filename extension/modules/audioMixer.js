@@ -20,7 +20,6 @@
   let isLocalMicMuted = false;
   let manualMicMuteOverride = false;
   let autoMuteSyncEnabled = true;
-  let lastMicError = null;
   let connectedAudioElements = new Set();
   let connectedStreamIds = new Set();
   let remotePollInterval = null;
@@ -110,28 +109,10 @@
       if (jitsiBtn) {
         const label = (jitsiBtn.getAttribute('aria-label') || '').toLowerCase();
         const classList = (jitsiBtn.className || '').toLowerCase();
-        const ariaPressed = jitsiBtn.getAttribute('aria-pressed');
-        const isMutedAttr = jitsiBtn.getAttribute('data-is-muted');
-
-        if (isMutedAttr === 'true' || ariaPressed === 'true') {
+        if (classList.includes('toggled') || classList.includes('selected') || classList.includes('muted') || label.includes('unmute')) {
           return true;
         }
-        if (isMutedAttr === 'false' || ariaPressed === 'false') {
-          return false;
-        }
-
-        // Avoid false-positive if label contains both "mute" and "unmute" (e.g. "Mute / Unmute audio")
-        if (label.includes('mute') && label.includes('unmute')) {
-          if (classList.includes('is-muted') || classList.includes('audio-muted')) {
-            return true;
-          }
-          return false; // Default to UNMUTED so user voice is captured!
-        }
-
-        if (label.startsWith('unmute') || label === 'unmute' || label.includes('unmute audio')) {
-          return true;
-        }
-        if (label.startsWith('mute') || label === 'mute audio' || label.includes('turn off mic')) {
+        if (label.includes('mute audio') || label.includes('turn off mic')) {
           return false;
         }
       }
@@ -215,19 +196,16 @@
       micStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
       });
-      lastMicError = null;
       const micSource = audioCtx.createMediaStreamSource(micStream);
       micGainNode = audioCtx.createGain();
       micGainNode.gain.setValueAtTime(1, audioCtx.currentTime);
       micSource.connect(micGainNode);
       micGainNode.connect(analyser);
-      micGainNode.connect(mixerDest);
       console.log('[Audio Mixer] Local microphone connected with automatic mute synchronization.');
 
       // Check initial state
       syncLocalMicState();
     } catch (err) {
-      lastMicError = err;
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
 
@@ -255,10 +233,6 @@
   function connectRemoteAudioElements() {
     if (!audioCtx || !analyser) return;
 
-    if (audioCtx.state === 'suspended') {
-      try { audioCtx.resume(); } catch (e) {}
-    }
-
     // Discover both audio and video elements (Jitsi and Meet attach tracks to either)
     const mediaElements = document.querySelectorAll('audio, video');
     let remoteCount = 0;
@@ -278,21 +252,8 @@
       // Skip local microphone stream if attached to self-view
       if (micStream && srcObj.id === micStream.id) return;
 
-      // Attach event listeners to catch dynamic stream start with zero delay
-      if (!mediaEl._hasAiAssistantListeners) {
-        mediaEl._hasAiAssistantListeners = true;
-        mediaEl.addEventListener('play', () => connectRemoteAudioElements());
-        mediaEl.addEventListener('loadedmetadata', () => connectRemoteAudioElements());
-      }
-      if (!srcObj._hasAiAssistantTrackListener) {
-        srcObj._hasAiAssistantTrackListener = true;
-        try {
-          srcObj.addEventListener('addtrack', () => connectRemoteAudioElements());
-        } catch (e) {}
-      }
-
-      // If this exact stream instance is already connected to our mixer, simply count it
-      if (connectedStreamIds.has(srcObj.id)) {
+      // Count if already connected
+      if (connectedStreamIds.has(srcObj.id) || connectedAudioElements.has(mediaEl)) {
         remoteCount++;
         return;
       }
@@ -300,7 +261,6 @@
       try {
         const remoteSource = audioCtx.createMediaStreamSource(srcObj);
         remoteSource.connect(analyser);
-        remoteSource.connect(mixerDest);
         connectedAudioElements.add(mediaEl);
         connectedStreamIds.add(srcObj.id);
         remoteCount++;
@@ -447,10 +407,6 @@
     },
     getAutoMuteSync: () => autoMuteSyncEnabled,
     syncLocalMicState,
-    getMicStatus: () => ({
-      connected: Boolean(micStream),
-      error: lastMicError
-    }),
     getStats: () => ({
       activeSpeechDurationSec,
       silenceDurationSec,

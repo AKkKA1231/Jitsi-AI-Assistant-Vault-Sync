@@ -19,22 +19,22 @@
   const STORAGE_ACTIVE_KEY = 'jitsi_plugin_active_idx_v3';
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
   const GEMINI_CASCADE = [
-    'gemini-3.6-flash',
-    'gemini-3.6-flash-lite',
-    'gemini-3.5-flash',
     'gemini-2.0-flash-lite',
     'gemini-2.5-flash',
     'gemini-1.5-flash',
     'gemini-1.5-flash-8b',
-    'gemini-2.0-flash'
+    'gemini-2.0-flash',
+    'gemini-3.6-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite'
   ];
 
   const DEFAULT_ACCOUNTS = [
     {
       id: 'acc_1',
       name: 'Account 1 (Primary Drive)',
-      clientId: '',
-      clientSecret: '',
+      clientId: 'primary-drive-user@gmail.com',
+      clientSecret: '••••••••••••••••••••',
       folderName: 'meetingRecords',
       webhookUrl: '',
       token: ''
@@ -42,8 +42,8 @@
     {
       id: 'acc_2',
       name: 'Account 2 (Backup Drive)',
-      clientId: '',
-      clientSecret: '',
+      clientId: 'backup-drive-user@gmail.com',
+      clientSecret: '••••••••••••••••••••',
       folderName: 'meetingRecords_Archive',
       webhookUrl: '',
       token: ''
@@ -55,10 +55,8 @@
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (saved) {
       accounts = JSON.parse(saved);
-      // Clean legacy placeholder mock strings
+      // Automatically migrate legacy default folder names
       accounts.forEach(acc => {
-        if (acc.clientId === 'primary-drive-user@gmail.com' || acc.clientId === 'backup-drive-user@gmail.com') acc.clientId = '';
-        if (acc.clientSecret === '••••••••••••••••••••') acc.clientSecret = '';
         if (acc.folderName === 'Jitsi_Meetings') acc.folderName = 'meetingRecords';
         if (acc.folderName === 'Jitsi_Meetings_Archive') acc.folderName = 'meetingRecords_Archive';
       });
@@ -144,19 +142,14 @@
 
   function updateAiKeyDisplay() {
     const badge = document.getElementById('jitsiAiKeyBadge');
-    const missingBanner = document.getElementById('jitsiMissingKeyBanner');
-    const hasKey = geminiApiKey && geminiApiKey.trim().length > 10;
     if (badge) {
-      if (hasKey) {
+      if (geminiApiKey && geminiApiKey.length > 10) {
         badge.textContent = '✓ Gemini Active';
         badge.style.color = '#34d399';
       } else {
         badge.textContent = 'No Key';
-        badge.style.color = '#f87171';
+        badge.style.color = '#94a3b8';
       }
-    }
-    if (missingBanner) {
-      missingBanner.style.display = hasKey ? 'none' : 'block';
     }
   }
 
@@ -366,7 +359,6 @@
       liveSTTRecognizer.onresult = (evt) => {
         for (let i = evt.resultIndex; i < evt.results.length; ++i) {
           if (evt.results[i].isFinal) {
-            liveSTTRetryCount = 0; // Reset retry counter on successful speech detection
             const text = evt.results[i][0].transcript.trim();
             if (text.length > 1) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -395,25 +387,23 @@
         }
         // Gracefully halt retries if permission is unavailable
         if (err === 'not-allowed' || err === 'service-not-allowed' || err === 'audio-capture') {
-          showToast('⚠️ Speech recognition blocked by browser! Check microphone permissions in address bar.', true);
           liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
           return;
         }
-        liveSTTRetryCount++;
         console.log('[Live STT] Speech recognition notice:', err);
       };
 
       liveSTTRecognizer.onend = () => {
-        // Continue listening throughout the meeting across natural silence breaks
         if (Recorder.isCurrentlyRecording() && liveSTTRetryCount < MAX_LIVE_STT_RETRIES) {
+          liveSTTRetryCount++;
           if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
           liveSTTRestartTimer = setTimeout(() => {
-            if (Recorder.isCurrentlyRecording() && liveSTTRetryCount < MAX_LIVE_STT_RETRIES) {
+            if (Recorder.isCurrentlyRecording() && liveSTTRetryCount <= MAX_LIVE_STT_RETRIES) {
               try {
                 if (liveSTTRecognizer) liveSTTRecognizer.start();
               } catch (e) {}
             }
-          }, 600);
+          }, 2000);
         }
       };
 
@@ -494,11 +484,7 @@
     }
 
     try {
-      if (!geminiApiKey || geminiApiKey.trim().length <= 10) {
-        showToast('⚠️ No Gemini API Key configured: Only your local mic will be transcribed. Add your free Gemini key in Settings to capture remote participants!', true);
-      } else {
-        showToast('Initializing high-fidelity audio capture...');
-      }
+      showToast('Initializing high-fidelity audio capture...');
       const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
       if (Vault.createVaultSession) {
         await Vault.createVaultSession(room);
@@ -514,12 +500,6 @@
       }
       const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'));
       AudioMixer.initVAD(() => Recorder.isCurrentlyRecording());
-      if (AudioMixer.getMicStatus) {
-        const micStat = AudioMixer.getMicStatus();
-        if (!micStat.connected && micStat.error) {
-          showToast('⚠️ Microphone blocked by browser! Click the lock/tune icon in your address bar to Allow microphone.', true);
-        }
-      }
 
       liveCapturedTranscripts = [];
       const tBox = getEl('jitsiTranscriptBox');
@@ -1126,12 +1106,6 @@
       <!-- Interruption Recovery Alert Area -->
       <div id="jitsiRecoveryArea"></div>
 
-      <!-- Missing Key Quick Onboarding Banner -->
-      <div id="jitsiMissingKeyBanner" style="display:none; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.35); border-radius:6px; padding:8px 10px; margin:8px 14px; font-size:11px; color:#fca5a5; line-height:1.4;">
-        <div style="font-weight:700; color:#f87171; margin-bottom:2px;">🔑 Gemini API Key Not Configured</div>
-        <div>AI meeting transcription &amp; summaries require a free API key. Paste your free key in <a href="#" id="jitsiGoToSettingsKeyLink" style="color:#818cf8; text-decoration:underline; font-weight:700;">⚙️ Settings</a> (free from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">Google AI Studio</a>).</div>
-      </div>
-
       <!-- Navigation Tabs -->
       <div class="jitsi-ai-ext-tabs jitsi-ai-nav-tabs">
         <button id="jitsiTabBtn_audio" class="jitsi-ai-ext-tab jitsi-ai-tab-btn active" data-tab="audio">🎙️ Live Audio</button>
@@ -1396,16 +1370,6 @@
     getEl('jitsiTabBtn_audio').onclick = () => UI.switchTab('audio');
     getEl('jitsiTabBtn_notes').onclick = () => UI.switchTab('notes');
     getEl('jitsiTabBtn_settings').onclick = () => UI.switchTab('settings');
-
-    const goToSettingsLink = getEl('jitsiGoToSettingsKeyLink');
-    if (goToSettingsLink) {
-      goToSettingsLink.onclick = (e) => {
-        e.preventDefault();
-        UI.switchTab('settings');
-        const input = getEl('jitsiGeminiKeyInput');
-        if (input) input.focus();
-      };
-    }
 
     getEl('jitsiToggleRecordBtn').onclick = handleToggleRecord;
     getEl('jitsiTranscribeBtn').onclick = async () => {

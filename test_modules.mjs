@@ -261,12 +261,11 @@ it('Should have Gemini Flash model cascade configured', () => {
   const bgContent = fs.readFileSync(path.resolve('./extension/background.js'), 'utf-8');
   const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
 
-  // Verify prioritized low-503 high-throughput lifetime free models configured
-  assert.ok(bgContent.includes('gemini-2.0-flash-lite'), 'background.js must use gemini-2.0-flash-lite');
-  assert.ok(bgContent.includes('gemini-2.5-flash'), 'background.js must use gemini-2.5-flash');
-  assert.ok(bgContent.includes('gemini-1.5-flash'), 'background.js must use gemini-1.5-flash');
-  assert.ok(contentJs.includes('gemini-2.0-flash-lite'), 'content.js must use gemini-2.0-flash-lite');
-  assert.ok(contentJs.includes('gemini-2.5-flash'), 'content.js must use gemini-2.5-flash');
+  // Verify modern Flash models used instead of deprecated 1.5-flash
+  assert.ok(bgContent.includes('gemini-3.6-flash'), 'background.js must use gemini-3.6-flash');
+  assert.ok(bgContent.includes('gemini-flash-latest'), 'background.js must use gemini-flash-latest');
+  assert.ok(bgContent.includes('gemini-3.1-flash-lite'), 'background.js must use gemini-3.1-flash-lite');
+  assert.ok(contentJs.includes('gemini-3.6-flash'), 'content.js must use gemini-3.6-flash');
 });
 
 it('Should verify Gemini API Key persistence and auto-save synchronization across extension', () => {
@@ -347,7 +346,7 @@ await itAsync('Should verify live Gemini API connection if key is provided', asy
     contents: [{ parts: [{ text: 'Respond with OK' }] }]
   });
 
-  const models = ['gemini-2.0-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash'];
+  const models = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
   let successfulRes = null;
 
   for (const model of models) {

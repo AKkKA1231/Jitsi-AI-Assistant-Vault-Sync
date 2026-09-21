@@ -36,29 +36,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // ----------------------------------------------------
   const geminiInput = document.getElementById('popupGeminiKeyInput');
   const saveGeminiBtn = document.getElementById('savePopupGeminiBtn');
-  const testGeminiBtn = document.getElementById('testPopupGeminiBtn');
   const keyStatus = document.getElementById('popupKeyStatus');
-  const sttModeEl = document.getElementById('popSttMode');
 
-  function updateSttIndicator(hasKey) {
-    if (sttModeEl) {
-      if (hasKey) {
-        sttModeEl.textContent = 'Gemini Flash (Active)';
-        sttModeEl.style.color = '#34d399';
-      } else {
-        sttModeEl.textContent = 'Web Speech (Fallback)';
-        sttModeEl.style.color = '#fbbf24';
-      }
-    }
-  }
-
-  function setKeyStatus(saved, msg = '') {
+  function setKeyStatus(saved) {
     if (keyStatus) {
       keyStatus.style.display = saved ? 'block' : 'none';
-      keyStatus.textContent = msg || (saved ? '✓ Key configured & saved across browser' : '');
-      keyStatus.style.color = '#34d399';
+      keyStatus.textContent = saved ? '✓ Key configured & saved across browser' : '';
     }
-    updateSttIndicator(Boolean(saved));
   }
 
   function loadGeminiKey() {
@@ -68,8 +52,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (key) {
       geminiInput.value = key;
       setKeyStatus(true);
-    } else {
-      updateSttIndicator(false);
     }
 
     // 2. Try chrome.storage (sync / local)
@@ -91,10 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function saveGeminiKey(notify = true) {
-    let val = (geminiInput.value || '').trim();
-    val = val.replace(/^["'`\s]+|["'`\s]+$/g, '');
-    geminiInput.value = val;
-
+    const val = (geminiInput.value || '').trim();
     try { localStorage.setItem(STORAGE_AI_KEY, val); } catch (e) {}
     try {
       if (typeof chrome !== 'undefined' && chrome.storage) {
@@ -113,48 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (saveGeminiBtn) {
     saveGeminiBtn.addEventListener('click', () => saveGeminiKey(true));
-  }
-
-  if (testGeminiBtn) {
-    testGeminiBtn.addEventListener('click', () => {
-      let val = (geminiInput.value || '').trim();
-      val = val.replace(/^["'`\s]+|["'`\s]+$/g, '');
-      if (!val) {
-        alert('Please paste a Gemini API Key first.\nYou can get one free at aistudio.google.com/app/apikey');
-        return;
-      }
-      saveGeminiKey(false);
-      testGeminiBtn.disabled = true;
-      testGeminiBtn.textContent = '...';
-      if (keyStatus) {
-        keyStatus.style.display = 'block';
-        keyStatus.style.color = '#818cf8';
-        keyStatus.textContent = '⏳ Testing connection to Gemini AI endpoint...';
-      }
-
-      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'GEMINI_TEST_KEY', apiKey: val }, (resp) => {
-          testGeminiBtn.disabled = false;
-          testGeminiBtn.textContent = 'Test';
-          if (chrome.runtime.lastError || !resp || !resp.success) {
-            const err = resp?.error || chrome.runtime.lastError?.message || 'Connection failed';
-            if (keyStatus) {
-              keyStatus.style.display = 'block';
-              keyStatus.style.color = '#f87171';
-              keyStatus.textContent = `❌ Test failed: ${err}`;
-            }
-            alert(`❌ Gemini API Key Test Failed:\n${err}`);
-          } else {
-            setKeyStatus(true, `✅ Connected: ${resp.model} (Free Tier)`);
-            alert(`✅ Gemini API Key is Valid!\nModel Connected: ${resp.model}\nFree tier active & ready for Jitsi recordings.`);
-          }
-        });
-      } else {
-        testGeminiBtn.disabled = false;
-        testGeminiBtn.textContent = 'Test';
-        alert('Chrome runtime not available');
-      }
-    });
   }
 
   // Auto-save on typing or paste without needing to click Save

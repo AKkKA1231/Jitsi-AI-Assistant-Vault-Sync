@@ -340,24 +340,9 @@ async function handleSlackNotification({
 
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
-// Active production models from Google with verified lifetime free tier multimodal audio support
-// gemini-3.6-flash is prioritized as recommended by Google's Generative Language API
+// Active production models from Google with verified audio multimodal support
+// gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
 const ACTIVE_GEMINI_MODELS = [
-  'gemini-3.6-flash',
-  'gemini-3.6-flash-lite',
-  'gemini-3.5-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-2.0-flash'
-];
-
-// Compatibility cascade for text synthesis & summaries
-const GEMINI_MODELS = [
-  'gemini-3.6-flash',
-  'gemini-3.6-flash-lite',
-  'gemini-3.5-flash',
   'gemini-2.0-flash-lite',
   'gemini-2.5-flash',
   'gemini-1.5-flash',
@@ -367,30 +352,24 @@ const GEMINI_MODELS = [
 
 let lastWorkingAudioModel = null;
 
-// Hydrate cached model from chrome.storage.local on service worker startup
-if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-  chrome.storage.local.get(['last_working_audio_model'], (res) => {
-    if (res && res.last_working_audio_model && ACTIVE_GEMINI_MODELS.includes(res.last_working_audio_model)) {
-      lastWorkingAudioModel = res.last_working_audio_model;
-      console.log(`[Gemini Background] Restored cached working model: ${lastWorkingAudioModel}`);
-    }
-  });
-}
-
-function setWorkingAudioModel(model) {
-  if (!model || !ACTIVE_GEMINI_MODELS.includes(model)) return;
-  lastWorkingAudioModel = model;
-  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-    chrome.storage.local.set({ last_working_audio_model: model });
-  }
-}
-
 function getOrderedAudioModels() {
   if (lastWorkingAudioModel && ACTIVE_GEMINI_MODELS.includes(lastWorkingAudioModel)) {
     return [lastWorkingAudioModel, ...ACTIVE_GEMINI_MODELS.filter(m => m !== lastWorkingAudioModel)];
   }
   return [...ACTIVE_GEMINI_MODELS];
 }
+
+// Compatibility cascade for text synthesis & test assertions
+const GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite'
+];
 
 async function fetchWithBackoff(url, options, maxRetries = 1) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -423,10 +402,9 @@ async function fetchWithBackoff(url, options, maxRetries = 1) {
 }
 
 async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName }) {
-  let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
-  activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
+  const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
-    throw new Error('Gemini API Key is missing. Please enter your free Gemini API key in Settings (⚙️).');
+    throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
   }
   if (!base64Audio) {
     throw new Error('No audio data provided to transcribe.');
@@ -469,7 +447,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
   const modelsToTry = getOrderedAudioModels();
   for (const model of modelsToTry) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       console.log(`[Gemini Background] Requesting transcription via ${model}...`);
       
       const response = await fetchWithBackoff(url, {
@@ -491,9 +469,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
         } catch (e) {}
 
         if (response.status === 503) {
-          errMsg = `Model ${model} overloaded (503). Cascading to next model...`;
-        } else if (response.status === 429) {
-          errMsg = `Model ${model} rate/quota limit reached (429). Cascading to next model...`;
+          errMsg = 'Gemini servers temporarily overloaded (503). Click Retry in a moment.';
         } else if (response.status === 400 && errMsg.toLowerCase().includes('api_key')) {
           errMsg = 'Invalid Gemini API key. Please check your key in Settings.';
         }
@@ -507,7 +483,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
       }
 
       console.log(`[Gemini Background] Successfully transcribed via ${model}`);
-      setWorkingAudioModel(model);
+      lastWorkingAudioModel = model;
 
       // Parse sections
       const extractedDecisions = [];
@@ -549,10 +525,9 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
  * Transcribes an individual 3-5 minute audio chunk
  */
 async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName }) {
-  let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
-  activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
+  const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
-    throw new Error('Gemini API Key is missing. Please enter your free Gemini API key in Settings (⚙️).');
+    throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
   }
   if (!base64Audio) {
     return { chunkIndex, transcript: '' };
@@ -583,7 +558,7 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
   const modelsToTry = getOrderedAudioModels();
   for (const model of modelsToTry) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       const response = await fetchWithBackoff(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -614,7 +589,7 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
 
       const data = await response.json();
       const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      setWorkingAudioModel(model);
+      lastWorkingAudioModel = model;
       return { chunkIndex, transcript: transcript.trim(), modelUsed: model };
     } catch (err) {
       if (err.message.includes('Invalid Gemini API key')) {
@@ -641,43 +616,16 @@ async function handleGeminiTestKey({ apiKey }) {
     contents: [{ parts: [{ text: 'Hello, respond with: OK' }] }]
   };
 
-  // 1. Candidate models prioritized with latest Google Gemini 3.x Flash models
-  let candidateModels = [
-    'gemini-3.6-flash',
-    'gemini-3.6-flash-lite',
-    'gemini-3.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-2.5-flash',
+  // Test against universally available GA models first (gemini-1.5-flash, gemini-2.0-flash)
+  const testModels = [
     'gemini-1.5-flash',
-    'gemini-1.5-flash-8b',
-    'gemini-2.0-flash'
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash-8b'
   ];
 
-  // 2. Proactively discover actively available models for this specific API key
-  try {
-    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(activeKey)}`);
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      if (listData && Array.isArray(listData.models)) {
-        const discovered = listData.models
-          .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
-          .map(m => (m.name || '').replace(/^models\//, ''))
-          .filter(name => Boolean(name));
-
-        const discoveredFlash = discovered.filter(n => n.includes('flash'));
-        const activeDiscovered = discoveredFlash.length > 0 ? discoveredFlash : discovered;
-        if (activeDiscovered.length > 0) {
-          candidateModels = [...new Set([...activeDiscovered, ...candidateModels])];
-          console.log('[Gemini Background] Discovered active models for key:', activeDiscovered);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[Gemini Background] Model discovery notice:', e.message);
-  }
-
   let lastErr = null;
-  for (const model of candidateModels) {
+  for (const model of testModels) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
       const res = await fetch(url, {
@@ -687,7 +635,7 @@ async function handleGeminiTestKey({ apiKey }) {
       });
 
       if (res.ok) {
-        setWorkingAudioModel(model);
+        lastWorkingAudioModel = model;
         return { success: true, modelUsed: model, message: `Connected! Verified with ${model}.` };
       }
 
@@ -734,8 +682,7 @@ async function handleGeminiTestKey({ apiKey }) {
  * Synthesizes combined chunk transcripts into Executive Minutes
  */
 async function handleGeminiSynthesizeSummary({ apiKey, fullTranscriptText, roomName }) {
-  let activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
-  activeKey = activeKey.replace(/^["'`\s]+|["'`\s]+$/g, '');
+  const activeKey = apiKey || DEFAULT_GEMINI_KEY;
   if (!activeKey) {
     throw new Error('No Gemini API key provided.');
   }
@@ -761,10 +708,9 @@ A crisp 3-sentence summary of the discussion.`;
   };
 
   let lastError = null;
-  const modelsToTry = getOrderedAudioModels();
-  for (const model of modelsToTry) {
+  for (const model of GEMINI_MODELS) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
       const response = await fetchWithBackoff(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -778,7 +724,6 @@ A crisp 3-sentence summary of the discussion.`;
 
       const data = await response.json();
       const summaryText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      setWorkingAudioModel(model);
 
       const extractedDecisions = [];
       const extractedActions = [];
