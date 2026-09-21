@@ -332,6 +332,90 @@
   }
 
   // --------------------------------------------------------------------------
+  // Speaker Identification & Participant Roster Engine
+  // --------------------------------------------------------------------------
+  function getMeetingParticipantRoster() {
+    const names = new Set();
+
+    // 1. Jitsi Meet Conference API
+    try {
+      if (typeof window !== 'undefined' && window.APP && window.APP.conference) {
+        const localName = window.APP.conference.getLocalDisplayName && window.APP.conference.getLocalDisplayName();
+        if (localName && localName.trim() && localName.toLowerCase() !== 'me') {
+          names.add(localName.trim());
+        }
+
+        const members = window.APP.conference.listMembers ? window.APP.conference.listMembers() : [];
+        members.forEach(m => {
+          const name = (m.getName && m.getName()) || (m.getDisplayName && m.getDisplayName());
+          if (name && name.trim()) names.add(name.trim());
+        });
+      }
+    } catch (e) {}
+
+    // 2. DOM Discovery (Jitsi & Google Meet)
+    try {
+      const elList = document.querySelectorAll(
+        '.displayname, [data-testid="participant-name"], [data-testid="local-display-name"], .localnick, .participant-name, [data-self-name]'
+      );
+      elList.forEach(el => {
+        const txt = (el.textContent || '').trim();
+        if (txt && txt.length > 1 && txt.length < 40 && !txt.includes('(') && !txt.toLowerCase().includes('mute')) {
+          names.add(txt);
+        }
+      });
+    } catch (e) {}
+
+    return Array.from(names);
+  }
+
+  function getCurrentSpeakerName() {
+    // 1. Check if meeting mic is unmuted and user voice is active
+    const isMicMuted = AudioMixer && AudioMixer.isMicMuted ? AudioMixer.isMicMuted() : false;
+
+    // 2. Check Jitsi active participant ID
+    try {
+      if (typeof window !== 'undefined' && window.APP && window.APP.conference) {
+        const activeId = window.APP.conference.getActiveParticipant && window.APP.conference.getActiveParticipant();
+        if (activeId) {
+          const activeName = window.APP.conference.getParticipantDisplayName && window.APP.conference.getParticipantDisplayName(activeId);
+          if (activeName && activeName.trim()) return activeName.trim();
+        }
+      }
+    } catch (e) {}
+
+    // 3. Check dominant speaker indicator in DOM
+    try {
+      const dominantEl = document.querySelector(
+        '.dominant-speaker .displayname, [data-testid="dominant-speaker"] .displayname, .active-speaker .displayname, div[data-is-active-speaker="true"]'
+      );
+      if (dominantEl) {
+        const dName = dominantEl.textContent.trim();
+        if (dName) return dName;
+      }
+    } catch (e) {}
+
+    // 4. If user mic is not muted, default to local participant's display name or 'You'
+    if (!isMicMuted) {
+      try {
+        if (window.APP && window.APP.conference && window.APP.conference.getLocalDisplayName) {
+          const loc = window.APP.conference.getLocalDisplayName();
+          if (loc && loc.trim()) return loc.trim();
+        }
+        const localEl = document.querySelector('.localnick, [data-testid="local-display-name"], [data-self-name]');
+        if (localEl && localEl.textContent.trim()) return localEl.textContent.trim();
+      } catch (e) {}
+      return 'You';
+    }
+
+    // 5. If user is muted, attribute to remote participant
+    const roster = getMeetingParticipantRoster();
+    if (roster.length > 0) return roster[0];
+
+    return 'Speaker';
+  }
+
+  // --------------------------------------------------------------------------
   // Live Speech-to-Text Recognizer
   // --------------------------------------------------------------------------
   let liveSTTRetryCount = 0;
@@ -365,12 +449,13 @@
             if (text.length > 1) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               const elapsedSec = meetingRecordingStartTime ? Math.round((Date.now() - meetingRecordingStartTime) / 1000) : 0;
-              liveCapturedTranscripts.push({ time: timeStr, elapsedSec, text });
+              const speaker = getCurrentSpeakerName();
+              liveCapturedTranscripts.push({ time: timeStr, elapsedSec, speaker, text });
               const tBox = getEl('jitsiTranscriptBox');
               if (tBox) {
                 const item = document.createElement('div');
                 item.style.marginBottom = '6px';
-                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:600;">[${timeStr}]</span> <span>${UI.escapeHtml(text)}</span>`;
+                item.innerHTML = `<span style="color:#818cf8; font-size:11px; font-weight:600;">[${timeStr}]</span> <span style="color:#34d399; font-weight:700; font-size:11px;">${UI.escapeHtml(speaker)}:</span> <span>${UI.escapeHtml(text)}</span>`;
                 const ph = tBox.querySelector('em');
                 if (ph) ph.remove();
                 tBox.appendChild(item);
@@ -540,10 +625,12 @@
 
           // 2. Preemptively transcribe in background with Web Speech STT fallback
           const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
+          const participants = getMeetingParticipantRoster();
           Transcriber.transcribeSingleBlock(sealedBlock, {
             apiKey: activeKey,
             roomName: room,
-            liveTranscripts: liveCapturedTranscripts
+            liveTranscripts: liveCapturedTranscripts,
+            participants
           }).then((result) => {
             activeMeetingBlockTranscripts[sealedBlock.index] = result;
             if (result.isFailed) {
@@ -620,12 +707,14 @@
 
     const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
     const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
+    const participants = getMeetingParticipantRoster();
 
     try {
       const result = await Transcriber.transcribeSingleBlock(targetBlock, {
         apiKey: activeKey,
         roomName: room,
-        liveTranscripts: liveCapturedTranscripts
+        liveTranscripts: liveCapturedTranscripts,
+        participants
       });
 
       activeMeetingBlockTranscripts[blockIndex] = result;
@@ -708,12 +797,14 @@
       showToast(`✨ Fast-compiling ${logicalBlocks.length} audio block(s)...`);
 
       const activeKey = geminiApiKey || DEFAULT_GEMINI_KEY;
+      const participants = getMeetingParticipantRoster();
       const transcriptionResult = await Transcriber.compilePreemptivelyTranscribedMeeting({
         blocks: logicalBlocks,
         precomputedTranscripts: activeMeetingBlockTranscripts,
         apiKey: activeKey,
         roomName: room,
         liveTranscripts: liveCapturedTranscripts,
+        participants,
         unifiedAudioBlob: compiledAudioBlob,
         forceRetry: forceRetry,
         onProgress: (pct, msg) => {
