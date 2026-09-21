@@ -110,10 +110,28 @@
       if (jitsiBtn) {
         const label = (jitsiBtn.getAttribute('aria-label') || '').toLowerCase();
         const classList = (jitsiBtn.className || '').toLowerCase();
-        if (classList.includes('toggled') || classList.includes('selected') || classList.includes('muted') || label.includes('unmute')) {
+        const ariaPressed = jitsiBtn.getAttribute('aria-pressed');
+        const isMutedAttr = jitsiBtn.getAttribute('data-is-muted');
+
+        if (isMutedAttr === 'true' || ariaPressed === 'true') {
           return true;
         }
-        if (label.includes('mute audio') || label.includes('turn off mic')) {
+        if (isMutedAttr === 'false' || ariaPressed === 'false') {
+          return false;
+        }
+
+        // Avoid false-positive if label contains both "mute" and "unmute" (e.g. "Mute / Unmute audio")
+        if (label.includes('mute') && label.includes('unmute')) {
+          if (classList.includes('is-muted') || classList.includes('audio-muted')) {
+            return true;
+          }
+          return false; // Default to UNMUTED so user voice is captured!
+        }
+
+        if (label.startsWith('unmute') || label === 'unmute' || label.includes('unmute audio')) {
+          return true;
+        }
+        if (label.startsWith('mute') || label === 'mute audio' || label.includes('turn off mic')) {
           return false;
         }
       }
@@ -203,6 +221,7 @@
       micGainNode.gain.setValueAtTime(1, audioCtx.currentTime);
       micSource.connect(micGainNode);
       micGainNode.connect(analyser);
+      micGainNode.connect(mixerDest);
       console.log('[Audio Mixer] Local microphone connected with automatic mute synchronization.');
 
       // Check initial state
@@ -264,6 +283,7 @@
       try {
         const remoteSource = audioCtx.createMediaStreamSource(srcObj);
         remoteSource.connect(analyser);
+        remoteSource.connect(mixerDest);
         connectedAudioElements.add(mediaEl);
         connectedStreamIds.add(srcObj.id);
         remoteCount++;
