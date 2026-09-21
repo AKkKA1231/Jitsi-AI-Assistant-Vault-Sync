@@ -156,7 +156,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             alert(`❌ Gemini API Key Test Failed:\n${err}`);
           } else {
-            const connectedModel = resp.model || resp.data?.modelUsed || 'gemini-3.1-flash-lite';
+            const connectedModel = resp.model || resp.data?.modelUsed || 'gemini-2.0-flash-lite';
             setKeyStatus(true, `✅ Connected: ${connectedModel} (Free Tier)`);
             alert(`✅ Gemini API Key is Valid!\nModel Connected: ${connectedModel}\nFree tier active & ready for Jitsi recordings.`);
           }

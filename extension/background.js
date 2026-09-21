@@ -341,21 +341,20 @@ async function handleSlackNotification({
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
 // Active production models from Google with verified lifetime free tier multimodal audio support
-// gemini-3.1-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
-// Retired/shut-down models (gemini-1.5-flash, gemini-1.5-flash-8b, gemini-2.0-flash, gemini-2.0-flash-lite, gemini-2.5-flash) have been removed.
+// gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
 const ACTIVE_GEMINI_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-flash-latest'
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b'
 ];
 
 // Compatibility cascade for text synthesis & summaries
 const GEMINI_MODELS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-flash-latest'
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b'
 ];
 
 let lastWorkingAudioModel = null;
@@ -646,10 +645,10 @@ async function handleGeminiTestKey({ apiKey }) {
 
   // Test against active lifetime free tier models prioritized for speed and lowest 503 errors
   const testModels = [
-    'gemini-3.1-flash-lite',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-flash-latest'
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b'
   ];
 
   let lastErr = null;

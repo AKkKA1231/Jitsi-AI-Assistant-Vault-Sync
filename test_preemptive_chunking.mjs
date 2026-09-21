@@ -339,13 +339,10 @@ console.log('\n--- Test Group 9: Multimodal Audio Model Cascade Priority & Diagn
   const contentCode = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
 
   // Verify active lifetime free models prioritized for high throughput and low 503 errors
-  assert.ok(bgCode.includes("'gemini-3.1-flash-lite'"), 'Must include gemini-3.1-flash-lite in active models');
-  assert.ok(bgCode.includes("'gemini-3.6-flash'"), 'Must include gemini-3.6-flash in active models');
-  assert.ok(bgCode.includes("'gemini-flash-latest'"), 'Must include gemini-flash-latest in active models');
-
-  // Verify discontinued models are removed
-  assert.ok(!bgCode.includes("'gemini-1.5-flash'"), 'Must not include retired 1.5-flash');
-  assert.ok(!bgCode.includes("'gemini-2.0-flash'"), 'Must not include retired 2.0-flash');
+  assert.ok(bgCode.includes("'gemini-2.0-flash-lite'"), 'Must include gemini-2.0-flash-lite in active models');
+  assert.ok(bgCode.includes("'gemini-2.0-flash'"), 'Must include gemini-2.0-flash in active models');
+  assert.ok(bgCode.includes("'gemini-1.5-flash'"), 'Must include gemini-1.5-flash in active models');
+  assert.ok(contentCode.includes("'gemini-2.0-flash-lite'"), 'Must include gemini-2.0-flash-lite in content.js cascade');
 
   // Verify GEMINI_TEST_KEY diagnostic support
   // Verify sticky working audio model caching

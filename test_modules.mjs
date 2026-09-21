@@ -261,16 +261,12 @@ it('Should have Gemini Flash model cascade configured', () => {
   const bgContent = fs.readFileSync(path.resolve('./extension/background.js'), 'utf-8');
   const contentJs = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
 
-  // Verify active lifetime free models configured
-  assert.ok(bgContent.includes('gemini-3.1-flash-lite'), 'background.js must use gemini-3.1-flash-lite');
-  assert.ok(bgContent.includes('gemini-3.6-flash'), 'background.js must use gemini-3.6-flash');
-  assert.ok(bgContent.includes('gemini-3.5-flash'), 'background.js must use gemini-3.5-flash');
-  assert.ok(bgContent.includes('gemini-flash-latest'), 'background.js must use gemini-flash-latest');
-  assert.ok(contentJs.includes('gemini-3.1-flash-lite'), 'content.js must use gemini-3.1-flash-lite');
-
-  // Verify discontinued models are NOT present in cascade
-  assert.ok(!bgContent.includes("'gemini-1.5-flash'"), 'background.js must not use retired 1.5-flash');
-  assert.ok(!bgContent.includes("'gemini-2.0-flash'"), 'background.js must not use retired 2.0-flash');
+  // Verify prioritized low-503 high-throughput lifetime free models configured
+  assert.ok(bgContent.includes('gemini-2.0-flash-lite'), 'background.js must use gemini-2.0-flash-lite');
+  assert.ok(bgContent.includes('gemini-2.0-flash'), 'background.js must use gemini-2.0-flash');
+  assert.ok(bgContent.includes('gemini-1.5-flash'), 'background.js must use gemini-1.5-flash');
+  assert.ok(contentJs.includes('gemini-2.0-flash-lite'), 'content.js must use gemini-2.0-flash-lite');
+  assert.ok(contentJs.includes('gemini-1.5-flash'), 'content.js must use gemini-1.5-flash');
 });
 
 it('Should verify Gemini API Key persistence and auto-save synchronization across extension', () => {
@@ -351,7 +347,7 @@ await itAsync('Should verify live Gemini API connection if key is provided', asy
     contents: [{ parts: [{ text: 'Respond with OK' }] }]
   });
 
-  const models = ['gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-3.5-flash'];
+  const models = ['gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
   let successfulRes = null;
 
   for (const model of models) {
