@@ -68,19 +68,31 @@
     const blockStart = typeof block.startSec === 'number' ? block.startSec : 0;
     const blockEnd = typeof block.endSec === 'number' ? block.endSec : (blockStart + (block.durationSec || 300));
 
+    // Match items with valid elapsedSec
     const matched = liveTranscripts.filter(item => {
       if (typeof item.elapsedSec === 'number') {
-        return item.elapsedSec >= (blockStart - 4) && item.elapsedSec <= (blockEnd + 4);
+        return item.elapsedSec >= (blockStart - 5) && item.elapsedSec <= (blockEnd + 5);
       }
-      return true;
+      return false;
     });
 
     if (matched.length > 0) {
       return matched.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
     }
 
-    if (liveTranscripts.length > 0 && block.index === 1) {
-      return liveTranscripts.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
+    // If items lack elapsedSec or only 1 block exists, provide captured transcript
+    if (liveTranscripts.length > 0) {
+      if (block.index === 1 && (!block.totalBlocks || block.totalBlocks === 1)) {
+        return liveTranscripts.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
+      }
+      // If timestamps not indexed, distribute across blocks proportionally
+      const totalBlocks = block.totalBlocks || 2;
+      const chunkSize = Math.max(1, Math.ceil(liveTranscripts.length / totalBlocks));
+      const startIdx = (block.index - 1) * chunkSize;
+      const slice = liveTranscripts.slice(startIdx, startIdx + chunkSize);
+      if (slice.length > 0) {
+        return slice.map(m => `[${m.time || block.startTime}] ${m.text}`).join('\n');
+      }
     }
 
     return '';
@@ -92,6 +104,22 @@
   async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [] } = {}) {
     if (!block || !block.blob) {
       return { index: block ? block.index : 0, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '', isFailed: true };
+    }
+
+    // Fast-fail if API key is missing entirely, fallback immediately to local Web Speech STT
+    if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+      const liveSpeech = extractSpeechFromLiveLog(block, liveTranscripts);
+      return {
+        index: block.index,
+        startTime: block.startTime,
+        endTime: block.endTime,
+        durationSec: block.durationSec,
+        transcript: liveSpeech || '',
+        isFallback: Boolean(liveSpeech),
+        isFailed: !liveSpeech,
+        error: 'No Gemini API key provided. Using local speech fallback.',
+        source: liveSpeech ? 'webspeech' : 'empty'
+      };
     }
 
     // Ignore tiny silence / partial stubs (< 1.5 KB) to avoid Google audio demuxer errors
@@ -150,8 +178,8 @@
           source: 'gemini'
         };
       } catch (err) {
-        if (err.message && err.message.includes('Invalid Gemini API key')) {
-          break; // Fast-fail on invalid API key without delay
+        if (err.message && (err.message.includes('Invalid Gemini API key') || err.message.includes('Gemini API Key is missing'))) {
+          break; // Fast-fail on invalid or missing API key without delaying the user
         }
         if (attempt < maxRetries) {
           console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1000ms (attempt ${attempt + 1}/${maxRetries})...`);
@@ -250,6 +278,45 @@
       console.log('[Transcriber] Incorporating full browser Live STT log into meeting transcript...');
       combinedTranscript = `### ⏱️ Spoken Dialogue (Captured Speech Engine)\n\n` +
         liveTranscripts.map(t => `[${t.time || '00:00'}] ${t.text}`).join('\n') + `\n\n` + combinedTranscript;
+    }
+
+    // Zero-Loss Audio Safety Net: If preemptive chunking produced incomplete speech,
+    // invoke direct Gemini transcription on the unified continuous audio stream to guarantee 100% complete notes.
+    const hasFailedBlocks = orderedResults.some(r => r.isFailed || !r.transcript || r.transcript.includes('No active speech'));
+    const isOnlyFallback = orderedResults.every(r => r.isFallback || r.isFailed || !r.transcript);
+
+    if ((hasFailedBlocks || isOnlyFallback) && unifiedAudioBlob && unifiedAudioBlob.size > 2500 && apiKey && apiKey.trim().length > 10) {
+      console.log('[Transcriber] Incomplete chunk transcript detected. Activating Unified Audio Zero-Loss Gemini transcription fallback...');
+      if (onProgress) onProgress(45, 'Synthesizing complete meeting from unified audio stream...');
+      try {
+        const unifiedBase64 = await blobToBase64(unifiedAudioBlob);
+        const unifiedRes = await new Promise((resolve, reject) => {
+          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({
+              action: 'GEMINI_TRANSCRIBE',
+              apiKey,
+              base64Audio: unifiedBase64,
+              mimeType: unifiedAudioBlob.type || 'audio/webm',
+              roomName: roomName || 'meeting'
+            }, (res) => {
+              if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+              else if (res && res.success) resolve(res.data);
+              else reject(new Error(res?.error || 'Unified transcription failed'));
+            });
+          } else {
+            resolve(null);
+          }
+        });
+
+        if (unifiedRes && unifiedRes.transcriptText && unifiedRes.transcriptText.trim().length > 20) {
+          console.log(`[Transcriber] Unified audio recovery succeeded via ${unifiedRes.modelUsed || 'Gemini'}!`);
+          combinedTranscript = `### 🎙️ Verbatim Meeting Transcript (${unifiedRes.modelUsed || 'Gemini Multimodal'})\n\n${unifiedRes.transcriptText}\n\n`;
+          if (unifiedRes.decisions && unifiedRes.decisions.length > 0) decisions = unifiedRes.decisions;
+          if (unifiedRes.actions && unifiedRes.actions.length > 0) actions = unifiedRes.actions;
+        }
+      } catch (recoveryErr) {
+        console.warn('[Transcriber] Unified audio recovery notice:', recoveryErr);
+      }
     }
 
     // 3. Fast Executive Synthesis Phase: Extract Decisions & Action Items with Gemini Flash

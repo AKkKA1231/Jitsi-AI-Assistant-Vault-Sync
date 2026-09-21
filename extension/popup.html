@@ -88,17 +88,23 @@
     </div>
     <div class="row">
       <span>AI Speech STT:</span>
-      <span class="val" style="color:#34d399;">Web Speech (Free)</span>
+      <span class="val" id="popSttMode" style="color:#34d399;">Web Speech (Free)</span>
     </div>
   </div>
 
-  <div style="margin-bottom:10px;">
-    <label style="font-size:11px; color:#94a3b8; display:block; margin-bottom:4px;">Google Gemini API Key (Multimodal STT):</label>
-    <div style="display:flex; gap:6px;">
-      <input type="password" id="popupGeminiKeyInput" placeholder="Paste Gemini API key" style="flex:1; padding:6px 8px; border-radius:4px; background:#1e293b; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
-      <button id="savePopupGeminiBtn" style="width:auto; margin:0; padding:6px 10px; background:#6366f1; font-size:11px;">Save</button>
+  <div style="margin-bottom:12px; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.25); border-radius:6px; padding:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+      <label style="font-size:11px; font-weight:600; color:#cbd5e1;">Gemini API Key (Lifetime Free Models):</label>
     </div>
-    <div id="popupKeyStatus" style="font-size:10px; color:#34d399; margin-top:3px; display:none;">✓ Key configured &amp; saved across browser</div>
+    <div style="font-size:10px; color:#94a3b8; margin-bottom:6px; line-height:1.3;">
+      Get a 100% lifetime free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">aistudio.google.com</a>
+    </div>
+    <div style="display:flex; gap:6px; margin-bottom:6px;">
+      <input type="password" id="popupGeminiKeyInput" placeholder="AIzaSy..." style="flex:1; padding:6px 8px; border-radius:4px; background:#1e293b; border:1px solid rgba(255,255,255,0.15); color:#fff; font-size:11px;">
+      <button id="savePopupGeminiBtn" style="width:auto; margin:0; padding:6px 10px; background:#6366f1; font-size:11px;">Save</button>
+      <button id="testPopupGeminiBtn" class="secondary-btn" style="width:auto; margin:0; padding:6px 10px; font-size:11px;">Test</button>
+    </div>
+    <div id="popupKeyStatus" style="font-size:10px; color:#34d399; margin-top:2px; display:none;">✓ Key configured &amp; saved across browser</div>
   </div>
 
   <div style="margin-bottom:10px;">

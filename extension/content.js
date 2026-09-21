@@ -23,10 +23,7 @@
     'gemini-2.5-flash',
     'gemini-1.5-flash',
     'gemini-1.5-flash-8b',
-    'gemini-2.0-flash',
-    'gemini-3.6-flash',
-    'gemini-flash-latest',
-    'gemini-3.1-flash-lite'
+    'gemini-2.0-flash'
   ];
 
   const DEFAULT_ACCOUNTS = [
@@ -142,14 +139,19 @@
 
   function updateAiKeyDisplay() {
     const badge = document.getElementById('jitsiAiKeyBadge');
+    const missingBanner = document.getElementById('jitsiMissingKeyBanner');
+    const hasKey = geminiApiKey && geminiApiKey.trim().length > 10;
     if (badge) {
-      if (geminiApiKey && geminiApiKey.length > 10) {
+      if (hasKey) {
         badge.textContent = '✓ Gemini Active';
         badge.style.color = '#34d399';
       } else {
         badge.textContent = 'No Key';
-        badge.style.color = '#94a3b8';
+        badge.style.color = '#f87171';
       }
+    }
+    if (missingBanner) {
+      missingBanner.style.display = hasKey ? 'none' : 'block';
     }
   }
 
@@ -359,6 +361,7 @@
       liveSTTRecognizer.onresult = (evt) => {
         for (let i = evt.resultIndex; i < evt.results.length; ++i) {
           if (evt.results[i].isFinal) {
+            liveSTTRetryCount = 0; // Reset retry counter on successful speech detection
             const text = evt.results[i][0].transcript.trim();
             if (text.length > 1) {
               const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -390,20 +393,21 @@
           liveSTTRetryCount = MAX_LIVE_STT_RETRIES;
           return;
         }
+        liveSTTRetryCount++;
         console.log('[Live STT] Speech recognition notice:', err);
       };
 
       liveSTTRecognizer.onend = () => {
+        // Continue listening throughout the meeting across natural silence breaks
         if (Recorder.isCurrentlyRecording() && liveSTTRetryCount < MAX_LIVE_STT_RETRIES) {
-          liveSTTRetryCount++;
           if (liveSTTRestartTimer) clearTimeout(liveSTTRestartTimer);
           liveSTTRestartTimer = setTimeout(() => {
-            if (Recorder.isCurrentlyRecording() && liveSTTRetryCount <= MAX_LIVE_STT_RETRIES) {
+            if (Recorder.isCurrentlyRecording() && liveSTTRetryCount < MAX_LIVE_STT_RETRIES) {
               try {
                 if (liveSTTRecognizer) liveSTTRecognizer.start();
               } catch (e) {}
             }
-          }, 2000);
+          }, 600);
         }
       };
 
@@ -484,7 +488,11 @@
     }
 
     try {
-      showToast('Initializing high-fidelity audio capture...');
+      if (!geminiApiKey || geminiApiKey.trim().length <= 10) {
+        showToast('⚠️ No Gemini API Key configured. Real-time Web Speech will be used. Paste your free key in Settings for AI transcription!', true);
+      } else {
+        showToast('Initializing high-fidelity audio capture...');
+      }
       const room = window.location.pathname.replace('/', '') || 'jitsi-meeting';
       if (Vault.createVaultSession) {
         await Vault.createVaultSession(room);
@@ -1106,6 +1114,12 @@
       <!-- Interruption Recovery Alert Area -->
       <div id="jitsiRecoveryArea"></div>
 
+      <!-- Missing Key Quick Onboarding Banner -->
+      <div id="jitsiMissingKeyBanner" style="display:none; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.35); border-radius:6px; padding:8px 10px; margin:8px 14px; font-size:11px; color:#fca5a5; line-height:1.4;">
+        <div style="font-weight:700; color:#f87171; margin-bottom:2px;">🔑 Gemini API Key Not Configured</div>
+        <div>AI meeting transcription &amp; summaries require a free API key. Paste your free key in <a href="#" id="jitsiGoToSettingsKeyLink" style="color:#818cf8; text-decoration:underline; font-weight:700;">⚙️ Settings</a> (free from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#818cf8; text-decoration:underline;">Google AI Studio</a>).</div>
+      </div>
+
       <!-- Navigation Tabs -->
       <div class="jitsi-ai-ext-tabs jitsi-ai-nav-tabs">
         <button id="jitsiTabBtn_audio" class="jitsi-ai-ext-tab jitsi-ai-tab-btn active" data-tab="audio">🎙️ Live Audio</button>
@@ -1370,6 +1384,16 @@
     getEl('jitsiTabBtn_audio').onclick = () => UI.switchTab('audio');
     getEl('jitsiTabBtn_notes').onclick = () => UI.switchTab('notes');
     getEl('jitsiTabBtn_settings').onclick = () => UI.switchTab('settings');
+
+    const goToSettingsLink = getEl('jitsiGoToSettingsKeyLink');
+    if (goToSettingsLink) {
+      goToSettingsLink.onclick = (e) => {
+        e.preventDefault();
+        UI.switchTab('settings');
+        const input = getEl('jitsiGeminiKeyInput');
+        if (input) input.focus();
+      };
+    }
 
     getEl('jitsiToggleRecordBtn').onclick = handleToggleRecord;
     getEl('jitsiTranscribeBtn').onclick = async () => {

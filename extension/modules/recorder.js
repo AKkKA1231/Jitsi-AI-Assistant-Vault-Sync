@@ -90,10 +90,15 @@
 
       // Block #1 already contains chunk #0 with the initial EBML + Segment + Tracks header.
       // Blocks #2, #3, ... contain only raw Clusters, so we prepend the cached WebM container
-      // header so Gemini and media decoders parse each block cleanly without HTTP 400 errors.
-      const blockChunks = (blockIndex === 1 || !cachedWebmHeader)
+      // header (or recordedChunks[0] as fallback) so Gemini and media decoders parse each block cleanly without HTTP 400 errors.
+      let headerToPrepend = cachedWebmHeader;
+      if (blockIndex > 1 && !headerToPrepend && recordedChunks.length > 0 && recordedChunks[0].size > 0) {
+        headerToPrepend = recordedChunks[0];
+      }
+
+      const blockChunks = (blockIndex === 1 || !headerToPrepend)
         ? currentBlockChunks
-        : [cachedWebmHeader, ...currentBlockChunks];
+        : [headerToPrepend, ...currentBlockChunks];
 
       const blockBlob = new Blob(blockChunks, { type: 'audio/webm' });
       const durationSec = Math.round((currentBlockChunks.length * CHUNK_TIME_SLICE_MS) / 1000);

@@ -17,38 +17,40 @@ When you join any [meet.jit.si](https://meet.jit.si) meeting, this extension aut
 
 ## ⚡ 3-Minute Quick Start
 
-### Step 1: Download & Unpack the Extension
-1. Clone or download the repository from GitHub:
+### Step 1: Unzip / Extract the Extension Archive
+1. If you received **`jitsi-ai-assistant-plugin.zip`**:
+   - Right-click the `.zip` file and select **"Extract All..."** (or unzip it to a folder on your computer, e.g., `C:\jitsi-plugin`).
+   - Open the extracted folder. You should see `manifest.json`, `background.js`, `content.js`, and `modules/` directly inside.
+   > ⚠️ **Important:** Do *not* try to drag-and-drop the `.zip` file directly into Chrome. Chrome requires you to select the *unzipped* folder!
+
+2. If you are cloning from GitHub:
    ```bash
    git clone https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync.git
    ```
-   *(Or download the ZIP from GitHub: click **Code** → **Download ZIP**, then extract it to a folder on your computer).*
-2. Look inside the folder — you will see a folder named `extension/`. That is your plugin!
+   Select the `extension/` directory inside the repository.
 
 ---
 
-### Step 2: Load the Extension in Your Browser
-You can use **Google Chrome**, **Microsoft Edge**, or **Brave**:
-
-1. Open your browser and go to your extensions manager:
-   - **Chrome**: Navigate to `chrome://extensions`
-   - **Edge**: Navigate to `edge://extensions`
-   - **Brave**: Navigate to `brave://extensions`
-2. In the top-right corner, turn **ON** **"Developer mode"** (toggle switch).
-3. Click the **"Load unpacked"** button in the top-left corner.
-4. Select the `extension/` folder from the project directory.
-5. 🎉 **Done!** You will now see **"Meetings_AI Assistant"** in your list of extensions.
+### Step 2: Load the Unpacked Extension in Chrome / Edge / Brave
+1. Open your browser and navigate to:
+   - **Chrome**: `chrome://extensions`
+   - **Edge**: `edge://extensions`
+   - **Brave**: `brave://extensions`
+2. Turn **ON** the **"Developer mode"** toggle (top right corner).
+3. Click the **"Load unpacked"** button (top left corner).
+4. Select the extracted folder containing `manifest.json`.
+5. 🎉 **Done!** You will immediately see **"Meetings_AI Assistant & Drive Sync"** loaded with an active green status.
 
 ---
 
-### Step 3: Enter Your Free Gemini API Key
-The assistant uses Google's ultra-fast Gemini Flash model to generate notes and action items.
+### Step 3: Enter & Test Your Lifetime Free Gemini API Key
+The assistant uses Google's high-speed, lifetime free tier multimodal Gemini models (`gemini-2.0-flash-lite`, `gemini-2.5-flash`, `gemini-1.5-flash`):
 
-1. Get a free API key in 30 seconds from [Google AI Studio](https://aistudio.google.com/app/apikey).
-2. Click the puzzle icon in your browser toolbar to open the extension popup (or open any Jitsi meeting).
-3. Open the **Settings** tab (⚙️ gear icon).
-4. Paste your API key into the **Gemini API Key** box and click **Save Settings**.
-   > 💡 *Your key is saved locally in your own browser's secure storage (`chrome.storage.local`). It is never shared or sent to any third-party server.*
+1. Get a 100% lifetime free API key in 30 seconds from [Google AI Studio](https://aistudio.google.com/app/apikey) (no credit card required).
+2. Click the extension icon in your browser toolbar to open the quick popup.
+3. Paste your key in the **Gemini API Key** box and click **Test**.
+4. You will see: `✅ Connected: gemini-2.0-flash-lite (Free Tier)`.
+5. Click **Save**. Your key is saved locally in `chrome.storage.local` across all your calls.
 
 ---
 
