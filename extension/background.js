@@ -341,8 +341,11 @@ async function handleSlackNotification({
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
 // Active production models from Google with verified lifetime free tier multimodal audio support
-// gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
+// gemini-3.6-flash is prioritized as recommended by Google's Generative Language API
 const ACTIVE_GEMINI_MODELS = [
+  'gemini-3.6-flash',
+  'gemini-3.6-flash-lite',
+  'gemini-3.5-flash',
   'gemini-2.0-flash-lite',
   'gemini-2.5-flash',
   'gemini-1.5-flash',
@@ -352,6 +355,9 @@ const ACTIVE_GEMINI_MODELS = [
 
 // Compatibility cascade for text synthesis & summaries
 const GEMINI_MODELS = [
+  'gemini-3.6-flash',
+  'gemini-3.6-flash-lite',
+  'gemini-3.5-flash',
   'gemini-2.0-flash-lite',
   'gemini-2.5-flash',
   'gemini-1.5-flash',
@@ -635,8 +641,11 @@ async function handleGeminiTestKey({ apiKey }) {
     contents: [{ parts: [{ text: 'Hello, respond with: OK' }] }]
   };
 
-  // Test against lifetime free tier models prioritized for speed and lowest 503 errors
-  const testModels = [
+  // 1. Candidate models prioritized with latest Google Gemini 3.x Flash models
+  let candidateModels = [
+    'gemini-3.6-flash',
+    'gemini-3.6-flash-lite',
+    'gemini-3.5-flash',
     'gemini-2.0-flash-lite',
     'gemini-2.5-flash',
     'gemini-1.5-flash',
@@ -644,8 +653,31 @@ async function handleGeminiTestKey({ apiKey }) {
     'gemini-2.0-flash'
   ];
 
+  // 2. Proactively discover actively available models for this specific API key
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(activeKey)}`);
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      if (listData && Array.isArray(listData.models)) {
+        const discovered = listData.models
+          .filter(m => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+          .map(m => (m.name || '').replace(/^models\//, ''))
+          .filter(name => Boolean(name));
+
+        const discoveredFlash = discovered.filter(n => n.includes('flash'));
+        const activeDiscovered = discoveredFlash.length > 0 ? discoveredFlash : discovered;
+        if (activeDiscovered.length > 0) {
+          candidateModels = [...new Set([...activeDiscovered, ...candidateModels])];
+          console.log('[Gemini Background] Discovered active models for key:', activeDiscovered);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Gemini Background] Model discovery notice:', e.message);
+  }
+
   let lastErr = null;
-  for (const model of testModels) {
+  for (const model of candidateModels) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`;
       const res = await fetch(url, {
