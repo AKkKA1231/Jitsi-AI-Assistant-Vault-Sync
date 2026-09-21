@@ -255,6 +255,10 @@
   function connectRemoteAudioElements() {
     if (!audioCtx || !analyser) return;
 
+    if (audioCtx.state === 'suspended') {
+      try { audioCtx.resume(); } catch (e) {}
+    }
+
     // Discover both audio and video elements (Jitsi and Meet attach tracks to either)
     const mediaElements = document.querySelectorAll('audio, video');
     let remoteCount = 0;
@@ -274,8 +278,21 @@
       // Skip local microphone stream if attached to self-view
       if (micStream && srcObj.id === micStream.id) return;
 
-      // Count if already connected
-      if (connectedStreamIds.has(srcObj.id) || connectedAudioElements.has(mediaEl)) {
+      // Attach event listeners to catch dynamic stream start with zero delay
+      if (!mediaEl._hasAiAssistantListeners) {
+        mediaEl._hasAiAssistantListeners = true;
+        mediaEl.addEventListener('play', () => connectRemoteAudioElements());
+        mediaEl.addEventListener('loadedmetadata', () => connectRemoteAudioElements());
+      }
+      if (!srcObj._hasAiAssistantTrackListener) {
+        srcObj._hasAiAssistantTrackListener = true;
+        try {
+          srcObj.addEventListener('addtrack', () => connectRemoteAudioElements());
+        } catch (e) {}
+      }
+
+      // If this exact stream instance is already connected to our mixer, simply count it
+      if (connectedStreamIds.has(srcObj.id)) {
         remoteCount++;
         return;
       }

@@ -492,7 +492,7 @@
 
     try {
       if (!geminiApiKey || geminiApiKey.trim().length <= 10) {
-        showToast('⚠️ No Gemini API Key configured. Real-time Web Speech will be used. Paste your free key in Settings for AI transcription!', true);
+        showToast('⚠️ No Gemini API Key configured: Only your local mic will be transcribed. Add your free Gemini key in Settings to capture remote participants!', true);
       } else {
         showToast('Initializing high-fidelity audio capture...');
       }
