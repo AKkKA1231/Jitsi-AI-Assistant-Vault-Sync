@@ -96,12 +96,8 @@ function doPost(e) {
 
         // Move Google Doc to meetingFolder
         var docFile = DriveApp.getFileById(doc.getId());
-        try {
-          docFile.moveTo(meetingFolder);
-        } catch (mErr) {
-          meetingFolder.addFile(docFile);
-          try { DriveApp.getRootFolder().removeFile(docFile); } catch (e) {}
-        }
+        meetingFolder.addFile(docFile);
+        DriveApp.getRootFolder().removeFile(docFile);
         docUrl = docFile.getUrl();
 
         // Generate native Microsoft Word .docx file!

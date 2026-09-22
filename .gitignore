@@ -16,5 +16,7 @@ node_modules/
 test_screenshots/
 demo_video/
 *.log
+__pycache__/
 .vscode/
+test_emoji.docx
 

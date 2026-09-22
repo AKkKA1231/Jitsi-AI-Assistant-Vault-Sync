@@ -76,6 +76,14 @@ def render_inline(paragraph, text, base_font_size=10.5, base_color=RGBColor(0x33
             run.font.color.rgb = RGBColor(0x47, 0x55, 0x69)
 
 def convert_markdown_to_docx(input_path, output_path):
+    if not os.path.isfile(input_path):
+        print(f"Error: Input file does not exist: {input_path}")
+        sys.exit(1)
+
+    out_dir = os.path.dirname(os.path.abspath(output_path))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
     print(f"Reading Markdown from: {input_path}")
     with open(input_path, 'r', encoding='utf-8', errors='replace') as f:
         md_text = f.read()
@@ -83,8 +91,7 @@ def convert_markdown_to_docx(input_path, output_path):
     doc = docx.Document()
 
     # Set 1-inch margins
-    sections = doc.sections
-    for section in sections:
+    for section in doc.sections:
         section.top_margin = Inches(1.0)
         section.bottom_margin = Inches(1.0)
         section.left_margin = Inches(1.0)
@@ -101,8 +108,10 @@ def convert_markdown_to_docx(input_path, output_path):
     lines = md_text.splitlines()
     in_code_block = False
     code_block_lines = []
+    i = 0
 
-    for line in lines:
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
 
         # Handle code blocks
@@ -122,19 +131,54 @@ def convert_markdown_to_docx(input_path, output_path):
             else:
                 in_code_block = True
                 code_block_lines = []
+            i += 1
             continue
 
         if in_code_block:
             code_block_lines.append(line)
+            i += 1
             continue
 
         # Blank line
         if not stripped:
+            i += 1
+            continue
+
+        # Markdown Table support (| col1 | col2 |)
+        if stripped.startswith('|') and stripped.endswith('|'):
+            table_rows = []
+            while i < len(lines) and lines[i].strip().startswith('|') and lines[i].strip().endswith('|'):
+                row_raw = lines[i].strip()
+                # Exclude delimiter rows like |---|---|
+                if not re.match(r'^\|[\s\-:|]+\|$', row_raw):
+                    cols = [c.strip() for c in row_raw.strip('|').split('|')]
+                    table_rows.append(cols)
+                i += 1
+
+            if table_rows:
+                num_cols = max(len(r) for r in table_rows)
+                tbl = doc.add_table(rows=len(table_rows), cols=num_cols)
+                tbl.autofit = True
+
+                for r_idx, row_data in enumerate(table_rows):
+                    is_header = (r_idx == 0)
+                    row = tbl.rows[r_idx]
+                    for c_idx in range(num_cols):
+                        cell = row.cells[c_idx]
+                        set_cell_margins(cell, top=120, bottom=120, left=160, right=160)
+                        val = row_data[c_idx] if c_idx < len(row_data) else ''
+                        p = cell.paragraphs[0]
+                        p.paragraph_format.space_before = Pt(2)
+                        p.paragraph_format.space_after = Pt(2)
+                        render_inline(p, val, base_font_size=10, base_bold=is_header)
+
+                doc.add_paragraph().paragraph_format.space_after = Pt(6)
             continue
 
         # Horizontal rule
         if stripped in ('---', '***', '___'):
             add_horizontal_rule(doc)
+            i += 1
             continue
 
         # Heading 1 (# ...)
@@ -149,6 +193,7 @@ def convert_markdown_to_docx(input_path, output_path):
             run.font.size = Pt(20)
             run.bold = True
             run.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A) # Dark Navy/Slate
+            i += 1
             continue
 
         # Heading 2 (## ...)
@@ -163,6 +208,7 @@ def convert_markdown_to_docx(input_path, output_path):
             run.font.size = Pt(14)
             run.bold = True
             run.font.color.rgb = RGBColor(0x1E, 0x29, 0x3B)
+            i += 1
             continue
 
         # Heading 3 (### ...)
@@ -177,6 +223,7 @@ def convert_markdown_to_docx(input_path, output_path):
             run.font.size = Pt(12)
             run.bold = True
             run.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+            i += 1
             continue
 
         # Checkbox list (- [ ] or - [x])
@@ -199,6 +246,7 @@ def convert_markdown_to_docx(input_path, output_path):
             sym_run.font.color.rgb = symbol_color
 
             render_inline(p, item_text, base_font_size=10.5)
+            i += 1
             continue
 
         # Bullet list (- or *)
@@ -216,6 +264,7 @@ def convert_markdown_to_docx(input_path, output_path):
             bullet_run.font.color.rgb = RGBColor(0x4F, 0x46, 0xE5) # Indigo bullet
 
             render_inline(p, item_text, base_font_size=10.5)
+            i += 1
             continue
 
         # Timestamped speaker lines, e.g.: [00:00] Speaker 1: "..."
@@ -246,6 +295,7 @@ def convert_markdown_to_docx(input_path, output_path):
 
             # Speech
             render_inline(p, speech, base_font_size=10.5)
+            i += 1
             continue
 
         # Regular paragraph
@@ -254,6 +304,7 @@ def convert_markdown_to_docx(input_path, output_path):
         p.paragraph_format.space_after = Pt(6)
         p.paragraph_format.line_spacing = 1.15
         render_inline(p, stripped, base_font_size=10.5)
+        i += 1
 
     doc.save(output_path)
     print(f"✅ Successfully converted to DOCX: {output_path}")
