@@ -86,6 +86,8 @@
     return '';
   }
 
+  const inFlightBlockTranscriptions = new Map();
+
   /**
    * Preemptively transcribes a single 3-6 minute audio block in background
    */
@@ -94,100 +96,156 @@
       return { index: block ? block.index : 0, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '', isFailed: true };
     }
 
-    // Ignore tiny silence / partial stubs (< 1.5 KB) to avoid Google audio demuxer errors
-    if (block.blob.size < 1500) {
-      const liveSpeech = extractSpeechFromLiveLog(block, liveTranscripts);
-      return {
-        index: block.index,
-        startTime: block.startTime,
-        endTime: block.endTime,
-        durationSec: block.durationSec,
-        transcript: liveSpeech || '',
-        isFallback: Boolean(liveSpeech),
-        isFailed: false,
-        source: liveSpeech ? 'webspeech' : 'empty'
-      };
+    // Deduplicate in-flight calls: if this exact block is already being transcribed, reuse running Promise
+    const inFlightKey = `b_${block.index}_${block.blob.size}`;
+    if (inFlightBlockTranscriptions.has(inFlightKey)) {
+      console.log(`[Transcriber] Block #${block.index} already in-flight — reusing running Promise.`);
+      return inFlightBlockTranscriptions.get(inFlightKey);
     }
 
-    const maxRetries = 1;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const base64Data = await blobToBase64(block.blob);
-        const result = await new Promise((resolve, reject) => {
-          if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
-            chrome.runtime.sendMessage({
-              action: 'GEMINI_TRANSCRIBE_CHUNK',
-              apiKey,
-              base64Audio: base64Data,
-              mimeType: block.blob.type || 'audio/webm',
-              chunkIndex: block.index,
-              totalChunks: 1,
-              startTime: block.startTime,
-              endTime: block.endTime,
-              roomName: roomName || 'meeting'
-            }, (res) => {
-              if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-              } else if (res && res.success) {
-                resolve(res.data);
-              } else {
-                reject(new Error(res?.error || 'Block transcription failed'));
-              }
-            });
-          } else {
-            resolve({ chunkIndex: block.index, transcript: `[Block #${block.index}] Audio transcribed successfully.` });
-          }
-        });
-
+    const taskPromise = (async () => {
+      // Ignore tiny silence / partial stubs (< 1.5 KB) to avoid Google audio demuxer errors
+      if (block.blob.size < 1500) {
+        const liveSpeech = extractSpeechFromLiveLog(block, liveTranscripts);
         return {
           index: block.index,
           startTime: block.startTime,
           endTime: block.endTime,
           durationSec: block.durationSec,
-          transcript: result.transcript || '',
-          isFallback: false,
+          transcript: liveSpeech || '',
+          isFallback: Boolean(liveSpeech),
           isFailed: false,
-          source: 'gemini'
+          source: liveSpeech ? 'webspeech' : 'empty'
         };
-      } catch (err) {
-        if (err.message && err.message.includes('Invalid Gemini API key')) {
-          break; // Fast-fail on invalid API key without delay
-        }
-        if (attempt < maxRetries) {
-          console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1000ms (attempt ${attempt + 1}/${maxRetries})...`);
-          await new Promise(r => setTimeout(r, 1000));
-          continue;
-        }
+      }
 
-        // Seamless zero-loss fallback to real-time Web Speech STT captured during meeting
-        const liveFallback = extractSpeechFromLiveLog(block, liveTranscripts);
-        if (liveFallback && liveFallback.trim().length > 0) {
-          console.log(`[Transcriber] Seamlessly recovered Block #${block.index} speech via local Web Speech STT fallback!`);
+      const maxRetries = 1;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const base64Data = await blobToBase64(block.blob);
+          // Wrap sendMessage in a 120s timeout race.
+          // Chrome MV3 service workers can be killed after 5 minutes of inactivity.
+          // If the background is sleeping/terminated, the callback never fires — causing
+          // an infinite "Transcribing in Background..." hang. This race prevents that.
+          const sendMessagePromise = new Promise((resolve, reject) => {
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+              chrome.runtime.sendMessage({
+                action: 'GEMINI_TRANSCRIBE_CHUNK',
+                apiKey,
+                base64Audio: base64Data,
+                mimeType: block.blob.type || 'audio/webm',
+                chunkIndex: block.index,
+                totalChunks: 1,
+                startTime: block.startTime,
+                endTime: block.endTime,
+                roomName: roomName || 'meeting'
+              }, (res) => {
+                if (chrome.runtime.lastError) {
+                  reject(new Error(chrome.runtime.lastError.message));
+                } else if (res && res.success) {
+                  resolve(res.data);
+                } else {
+                  reject(new Error(res?.error || 'Block transcription failed'));
+                }
+              });
+            } else {
+              resolve({ chunkIndex: block.index, transcript: `[Block #${block.index}] Audio transcribed successfully.` });
+            }
+          });
+
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(
+              `Block #${block.index} transcription timed out after 2 minutes. ` +
+              `The background service worker may be sleeping (Chrome MV3 idle timeout). ` +
+              `Falling back to Web Speech STT.`
+            )), 120000)
+          );
+
+          const result = await Promise.race([sendMessagePromise, timeoutPromise]);
+
+          // Gemini responded successfully
+          const geminiText = (result.transcript || '').trim();
+
+          // If Gemini returned an empty transcript (audio decoded but no speech detected by model),
+          // attempt the live Web Speech STT fallback before giving up — the audio block IS real
+          // (e.g. 889 KB) and may contain speech that a model didn't pick up due to codec issues.
+          if (!geminiText) {
+            const liveFallback = extractSpeechFromLiveLog(block, liveTranscripts);
+            if (liveFallback && liveFallback.trim().length > 0) {
+              console.log(`[Transcriber] Block #${block.index}: Gemini returned empty — using Web Speech STT fallback.`);
+              return {
+                index: block.index,
+                startTime: block.startTime,
+                endTime: block.endTime,
+                durationSec: block.durationSec,
+                transcript: liveFallback,
+                isFallback: true,
+                isFailed: false,
+                source: 'webspeech'
+              };
+            }
+            // No live STT either — mark as failed so compilation will retry it
+            console.warn(`[Transcriber] Block #${block.index}: Gemini empty + no live STT. Marking failed for retry.`);
+            throw new Error(`Gemini returned empty transcript for Block #${block.index}`);
+          }
+
           return {
             index: block.index,
             startTime: block.startTime,
             endTime: block.endTime,
             durationSec: block.durationSec,
-            transcript: liveFallback,
-            isFallback: true,
+            transcript: geminiText,
+            isFallback: false,
             isFailed: false,
-            source: 'webspeech'
+            source: 'gemini'
+          };
+        } catch (err) {
+          if (err.message && err.message.includes('Invalid Gemini API key')) {
+            break; // Fast-fail on invalid API key without delay
+          }
+          if (attempt < maxRetries) {
+            console.log(`[Transcriber] Block #${block.index} transcription hiccup (${err.message}). Retrying in 1000ms (attempt ${attempt + 1}/${maxRetries})...`);
+            await new Promise(r => setTimeout(r, 1000));
+            continue;
+          }
+
+          // Seamless zero-loss fallback to real-time Web Speech STT captured during meeting
+          const liveFallback = extractSpeechFromLiveLog(block, liveTranscripts);
+          if (liveFallback && liveFallback.trim().length > 0) {
+            console.log(`[Transcriber] Seamlessly recovered Block #${block.index} speech via local Web Speech STT fallback!`);
+            return {
+              index: block.index,
+              startTime: block.startTime,
+              endTime: block.endTime,
+              durationSec: block.durationSec,
+              transcript: liveFallback,
+              isFallback: true,
+              isFailed: false,
+              source: 'webspeech'
+            };
+          }
+
+          console.log(`[Transcriber] Block #${block.index} transcription failed: ${err.message || err}`);
+          return {
+            index: block.index,
+            startTime: block.startTime,
+            endTime: block.endTime,
+            durationSec: block.durationSec,
+            transcript: '',
+            error: err.message || 'Transcription failed',
+            isFallback: false,
+            isFailed: true,
+            source: 'none'
           };
         }
-
-        console.log(`[Transcriber] Block #${block.index} transcription failed: ${err.message || err}`);
-        return {
-          index: block.index,
-          startTime: block.startTime,
-          endTime: block.endTime,
-          durationSec: block.durationSec,
-          transcript: '',
-          error: err.message || 'Transcription failed',
-          isFallback: false,
-          isFailed: true,
-          source: 'none'
-        };
       }
+    })();
+
+    inFlightBlockTranscriptions.set(inFlightKey, taskPromise);
+    try {
+      return await taskPromise;
+    } finally {
+      inFlightBlockTranscriptions.delete(inFlightKey);
     }
   }
 
@@ -203,7 +261,8 @@
     liveTranscripts = [],
     unifiedAudioBlob = null,
     forceRetry = false,
-    onProgress
+    onProgress,
+    onSynthesisError    // Optional: callback(errMsg) fired if AI executive summary fails
   } = {}) {
     if (!blocks || blocks.length === 0) {
       return { verbatimTranscript: '', decisions: [], actions: [], summaryText: '', markdown: '' };
@@ -212,12 +271,15 @@
     const total = blocks.length;
     console.log(`[Transcriber] Fast-compiling ${total} meeting blocks (${Object.keys(precomputedTranscripts).length} pre-transcribed in background)...`);
 
-    // 1. Identify uncompleted or previously failed blocks (retry if forced or failed)
+    // 1. Identify uncompleted or previously failed/empty blocks to (re-)transcribe.
+    // Always retry isFailed blocks — they may have failed due to deprecated models
+    // or transient API errors, and should be re-attempted with current working models.
     const pendingBlocks = blocks.filter(b => {
       const existing = precomputedTranscripts[b.index];
-      if (!existing) return true;
-      if (forceRetry && existing.isFailed) return true;
-      return false;
+      if (!existing) return true;                     // Never transcribed
+      if (existing.isFailed) return true;             // Failed — always retry
+      if (!existing.transcript && !existing.isFallback) return true; // Empty result, retry
+      return false;                                   // Already has valid transcript
     });
 
     if (pendingBlocks.length > 0) {
@@ -228,12 +290,23 @@
       });
     }
 
-    // 2. Stitch chronological verbatim transcript in strict order
-    const orderedResults = blocks.map(b => precomputedTranscripts[b.index] || {
-      index: b.index,
-      startTime: b.startTime,
-      endTime: b.endTime,
-      transcript: extractSpeechFromLiveLog(b, liveTranscripts) || 'No active speech detected in this interval.'
+    // 2. Stitch chronological verbatim transcript in strict order.
+    // For blocks with missing/empty/failed results, use live Web Speech STT as fallback
+    // before showing the "No active speech" placeholder.
+    const orderedResults = blocks.map(b => {
+      const result = precomputedTranscripts[b.index];
+      if (!result || result.isFailed || !result.transcript) {
+        const liveSpeech = extractSpeechFromLiveLog(b, liveTranscripts);
+        return {
+          index: b.index,
+          startTime: b.startTime,
+          endTime: b.endTime,
+          transcript: liveSpeech || (result && result.error ? `[Transcription error: ${result.error}]` : 'No active speech detected in this interval.'),
+          isFallback: Boolean(liveSpeech),
+          source: liveSpeech ? 'webspeech' : 'none'
+        };
+      }
+      return result;
     });
 
     orderedResults.sort((a, b) => a.index - b.index);
@@ -258,6 +331,7 @@
     let decisions = [];
     let actions = [];
     let executiveSummary = '';
+    let synthesisUsedFallback = false;
 
     try {
       const summaryResult = await new Promise((resolve, reject) => {
@@ -287,14 +361,25 @@
         executiveSummary = summaryResult.summaryMarkdown || '';
       }
     } catch (synthErr) {
-      console.warn('[Transcriber] Executive summary synthesis error, using heuristic extraction:', synthErr);
+      // Synthesis failed — advance progress bar so it doesn't freeze at 70%
+      if (onProgress) onProgress(85, 'AI summary unavailable — using keyword extraction from transcript...');
+
+      const errMsg = synthErr?.message || String(synthErr);
+      console.warn(`[Transcriber] Executive summary synthesis failed (${errMsg}). Falling back to heuristic keyword extraction from transcript.`);
+      synthesisUsedFallback = true;
+
+      // Fire optional UI callback so content.js can show a toast to the user
+      if (typeof onSynthesisError === 'function') {
+        onSynthesisError(errMsg);
+      }
     }
 
-    // Heuristic fallback if AI synthesis was offline
+    // Heuristic fallback if AI synthesis was offline or returned empty
     if (!decisions.length || !actions.length) {
       const fallback = extractHeuristicMinutes(combinedTranscript);
       if (!decisions.length) decisions = fallback.decisions;
       if (!actions.length) actions = fallback.actions;
+      synthesisUsedFallback = true;
     }
 
     // Build final Markdown document
@@ -316,14 +401,22 @@
     finalMarkdown += `## 📝 Chronological Spoken Transcript (${total} Blocks)\n\n`;
     finalMarkdown += combinedTranscript;
 
-    if (onProgress) onProgress(100, `AI Meeting Minutes & Audio Compilation Complete!`);
+    // Add a synthesis note at the bottom if heuristic fallback was used
+    if (synthesisUsedFallback) {
+      finalMarkdown += `\n> ⚠️ *Note: AI executive summary was unavailable. Decisions and action items above were extracted using keyword analysis of the transcript.*\n`;
+    }
+
+    if (onProgress) onProgress(100, synthesisUsedFallback
+      ? `Transcription complete. AI summary unavailable — keyword notes extracted.`
+      : `AI Meeting Minutes & Audio Compilation Complete!`);
 
     return {
       markdown: finalMarkdown,
       decisions,
       actions,
       transcriptText: combinedTranscript,
-      totalChunks: total
+      totalChunks: total,
+      synthesisUsedFallback   // true if Gemini summary failed; content.js can show a toast
     };
   }
 

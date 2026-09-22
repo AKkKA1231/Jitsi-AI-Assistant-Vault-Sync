@@ -338,13 +338,21 @@ console.log('\n--- Test Group 9: Multimodal Audio Model Cascade Priority & Diagn
   const bgCode = fs.readFileSync(path.resolve('./extension/background.js'), 'utf-8');
   const contentCode = fs.readFileSync(path.resolve('./extension/content.js'), 'utf-8');
 
-  // Verify gemini-2.0-flash is deprioritized after higher availability models
-  assert.ok(bgCode.includes("'gemini-2.5-flash'"), 'Must include gemini-2.5-flash in active models');
-  assert.ok(bgCode.includes("'gemini-2.0-flash-lite'"), 'Must include gemini-2.0-flash-lite in active models');
+  // Verify current active models are present in cascade
+  assert.ok(bgCode.includes("'gemini-2.5-flash'"), 'Must include gemini-2.5-flash as primary model');
+  assert.ok(bgCode.includes("'gemini-3.5-flash'"), 'Must include gemini-3.5-flash in cascade');
+  assert.ok(bgCode.includes("'gemini-3.7-flash'"), 'Must include gemini-3.7-flash in cascade');
+  assert.ok(bgCode.includes("'gemini-3.8-flash'"), 'Must include gemini-3.8-flash as latest fallback');
 
-  const flash20Index = bgCode.indexOf("'gemini-2.0-flash'");
-  const flashLiteIndex = bgCode.indexOf("'gemini-2.0-flash-lite'");
-  assert.ok(flashLiteIndex < flash20Index, 'gemini-2.0-flash must have lower priority than high-availability flash-lite to avoid 503 errors');
+  // Verify deprecated models are NOT present
+  assert.ok(!bgCode.includes("'gemini-1.5-flash'"), 'Must NOT include retired gemini-1.5-flash');
+  assert.ok(!bgCode.includes("'gemini-1.5-flash-8b'"), 'Must NOT include retired gemini-1.5-flash-8b');
+
+  // gemini-2.5-flash must be first in ACTIVE_GEMINI_MODELS (highest priority)
+  const activeStart = bgCode.indexOf('ACTIVE_GEMINI_MODELS = [');
+  const flash25Index = bgCode.indexOf("'gemini-2.5-flash'", activeStart);
+  const flash38Index = bgCode.indexOf("'gemini-3.8-flash'", activeStart);
+  assert.ok(flash25Index < flash38Index, 'gemini-2.5-flash (confirmed audio support) must have higher priority than newer models');
 
   // Verify GEMINI_TEST_KEY diagnostic support
   // Verify sticky working audio model caching

@@ -5,7 +5,8 @@
   "description": "Free AI meeting notes, continuous Speech-to-Text, and automated Google Drive upload with 1-click multi-account switcher.",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "alarms"
   ],
   "host_permissions": [
     "https://meet.jit.si/*",

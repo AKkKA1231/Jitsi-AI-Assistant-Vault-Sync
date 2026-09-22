@@ -19,13 +19,22 @@ This guide explains how to connect your personal or work Google Drive account to
 ```javascript
 /**
  * Meetings_AI Assistant - Personal Google Drive Sync Webhook
+ * Supports:
+ * - Direct Google Doc creation with rich typography & headers
+ * - Native .docx Word document generation (MimeType.MICROSOFT_WORD)
+ * - Drive API v3 Resumable Upload for high-capacity audio (0 MB limit, 0 timeouts!)
  */
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return responseJson({ success: false, error: "Empty POST body" });
+    }
+
     var data = JSON.parse(e.postData.contents);
     var mainFolderName = data.folderName || "meetingRecords";
-    
     var meetingFolder;
+
+    // 1. Locate or create meeting folder
     if (data.targetFolderId) {
       try {
         meetingFolder = DriveApp.getFolderById(data.targetFolderId);
@@ -33,30 +42,111 @@ function doPost(e) {
     }
 
     if (!meetingFolder) {
-      // 1. Locate or create main meetings folder
       var folders = DriveApp.getFoldersByName(mainFolderName);
       var mainFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(mainFolderName);
 
-      // 2. Create subfolder per meeting session
       var room = data.roomName || "Meeting";
       var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
       meetingFolder = mainFolder.createFolder(room + "_" + dateStr);
 
-      // Ensure ONLY this meeting folder is viewable to attendees via link (keeps personal Drive private)
       try {
         meetingFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       } catch (shareErr) {}
     }
 
-    // 3. Save Meeting Notes & Action Items (.md) if provided
-    var notesUrl = null;
-    if (data.markdownText) {
-      var mdFile = meetingFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", data.markdownText, "text/markdown");
-      notesUrl = mdFile.getUrl();
+    var folderId = meetingFolder.getId();
+    var folderUrl = meetingFolder.getUrl();
+    var docUrl = null;
+    var docxUrl = null;
+    var audioUrl = null;
+    var resumableUploadUrl = null;
+
+    // 2. Create formatted Google Doc & .docx Word Document if transcript text provided
+    if (data.markdownText && data.markdownText.trim().length > 0) {
+      try {
+        var docTitle = (data.markdownFileName || "Meeting_Summary")
+          .replace(/\.md$/i, "")
+          .replace(/\.docx$/i, "");
+
+        var doc = DocumentApp.create(docTitle);
+        var body = doc.getBody();
+        body.clear();
+
+        // Style headings and bullet points
+        var lines = data.markdownText.split("\n");
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) {
+            body.appendParagraph("");
+            continue;
+          }
+          if (line.indexOf("# ") === 0) {
+            body.appendParagraph(line.substring(2)).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+          } else if (line.indexOf("## ") === 0) {
+            body.appendParagraph(line.substring(3)).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+          } else if (line.indexOf("### ") === 0) {
+            body.appendParagraph(line.substring(4)).setHeading(DocumentApp.ParagraphHeading.HEADING3);
+          } else if (line.indexOf("- ") === 0 || line.indexOf("* ") === 0) {
+            body.appendListItem(line.substring(2));
+          } else {
+            body.appendParagraph(line);
+          }
+        }
+        doc.saveAndClose();
+
+        // Move Google Doc to meetingFolder
+        var docFile = DriveApp.getFileById(doc.getId());
+        try {
+          docFile.moveTo(meetingFolder);
+        } catch (mErr) {
+          meetingFolder.addFile(docFile);
+          try { DriveApp.getRootFolder().removeFile(docFile); } catch (e) {}
+        }
+        docUrl = docFile.getUrl();
+
+        // Generate native Microsoft Word .docx file!
+        try {
+          var docxBlob = docFile.getBlob().getAs(MimeType.MICROSOFT_WORD);
+          docxBlob.setName(docTitle + ".docx");
+          var docxFile = meetingFolder.createFile(docxBlob);
+          docxUrl = docxFile.getUrl();
+        } catch (docxErr) {
+          var mdFile = meetingFolder.createFile(docTitle + ".md", data.markdownText, "text/markdown");
+          docxUrl = mdFile.getUrl();
+        }
+      } catch (docErr) {
+        var fallbackFile = meetingFolder.createFile("Meeting_Summary.md", data.markdownText || "", "text/markdown");
+        docUrl = fallbackFile.getUrl();
+        docxUrl = fallbackFile.getUrl();
+      }
     }
 
-    // 4. Save Audio Recording (.webm) if provided
-    var audioUrl = null;
+    // 3. Initiate Google Drive API v3 Resumable Upload session for high-capacity audio
+    if (data.audioFileName && !data.audioBase64) {
+      try {
+        var token = ScriptApp.getOAuthToken();
+        if (token) {
+          var initApiUrl = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable";
+          var res = UrlFetchApp.fetch(initApiUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": "Bearer " + token,
+              "Content-Type": "application/json"
+            },
+            payload: JSON.stringify({
+              name: data.audioFileName || "Meeting_Audio.webm",
+              parents: [folderId],
+              mimeType: data.audioMimeType || "audio/webm"
+            }),
+            muteHttpExceptions: true
+          });
+          var headers = res.getAllHeaders();
+          resumableUploadUrl = headers["Location"] || headers["location"] || null;
+        }
+      } catch (tokenErr) {}
+    }
+
+    // 4. Save Audio if passed directly in Base64 (for small recordings)
     var audioBase64 = data.audioBase64 || data.base64Audio;
     if (audioBase64 && audioBase64.length > 0) {
       try {
@@ -65,48 +155,56 @@ function doPost(e) {
         var audioFile = meetingFolder.createFile(audioBlob);
         audioUrl = audioFile.getUrl();
       } catch (audioErr) {
-        meetingFolder.createFile("Audio_Upload_Notice.txt", "Audio payload exceeded Google Apps Script memory limit. Please download audio locally from the extension drawer.\n\nNotice: " + audioErr.toString());
+        meetingFolder.createFile("Audio_Upload_Notice.txt", "Audio payload exceeded memory limits. Notice: " + audioErr.toString());
       }
     }
 
-    return ContentService.createTextOutput(JSON.stringify({
+    return responseJson({
       success: true,
       status: "success",
-      folderId: meetingFolder.getId(),
-      folderUrl: meetingFolder.getUrl(),
-      notesUrl: notesUrl,
-      audioUrl: audioUrl
-    })).setMimeType(ContentService.MimeType.JSON);
+      folderId: folderId,
+      folderUrl: folderUrl,
+      notesUrl: docxUrl || docUrl,
+      docUrl: docUrl,
+      docxUrl: docxUrl,
+      audioUrl: audioUrl,
+      resumableUploadUrl: resumableUploadUrl
+    });
 
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
+    return responseJson({
       success: false,
       status: "error",
       error: err.toString(),
       message: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    });
   }
+}
+
+function responseJson(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Health check endpoint: visit your Web App URL in any browser tab to verify it's working!
 function doGet(e) {
-  return ContentService.createTextOutput(JSON.stringify({
+  return responseJson({
     status: "ok",
     message: "Google Drive Sync Webhook is live and ready!"
-  })).setMimeType(ContentService.MimeType.JSON);
+  });
 }
 ```
 
-4. Click **Deploy** (top-right blue button) > **New deployment**.
+4. Click **Deploy** (top-right blue button) > **New deployment** (or **Manage deployments** > **Edit** > **Version: New version** > **Deploy**).
 5. Click the gear icon (⚙️) next to "Select type" and choose **Web app**.
 6. Fill in the fields (**CRITICAL**):
-   * **Description**: `Jitsi AI Meeting Sync`
+   * **Description**: `Jitsi AI Meeting Sync (Docx + Resumable Audio)`
    * **Execute as**: `Me (your-email@gmail.com)`
-   * **Who has access**: `Anyone` *(IMPORTANT: Must be "Anyone", NOT "Only myself" or "Google Account". If set to "Only myself", Google blocks extension requests with HTTP 400/401)*.
+   * **Who has access**: `Anyone` *(IMPORTANT: Must be "Anyone", NOT "Only myself" or "Google Account". If set to "Only myself", Google blocks extension requests with HTTP 400/401/HTML login page)*.
 7. Click **Deploy**, click **Authorize access**, and sign in with your Google account.
 8. Copy the **Web App URL** (looks like: `https://script.google.com/macros/s/AKfycb.../exec`).
 
-> 💡 **Quick Verification**: Paste your Web App URL into a new browser tab. You should see `{"status":"ok","message":"Google Drive Sync Webhook is live and ready!"}`. If you see that, your webhook is 100% working!
+> 💡 **Updating Existing Deployment**: If you already deployed an older script, in script.google.com click **Deploy** > **Manage deployments** > Click the pencil icon (**Edit**) > Under Version select **New version** > Click **Deploy**. This ensures your Web App runs the new docx & resumable upload code!
 
 ### 🔗 Connect to the Extension:
 1. Join any Jitsi call or open the extension settings.

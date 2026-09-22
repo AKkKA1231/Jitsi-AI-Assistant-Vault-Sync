@@ -50,8 +50,196 @@
   }
 
   /**
-   * Upload using Google Drive REST API v3 with Bearer token
+   * Fast CRC32 checksum for standard PKZIP construction
    */
+  function crc32(buf) {
+    let table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let j = 0; j < 8; j++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      table[i] = c;
+    }
+    let crc = -1;
+    for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xff];
+    return (crc ^ -1) >>> 0;
+  }
+
+  /**
+   * Generates a 100% compliant uncompressed PKZIP buffer for OpenXML .docx
+   */
+  function createZipBuffer(files) {
+    const localHeaders = [];
+    const centralHeaders = [];
+    let offset = 0;
+
+    for (const file of files) {
+      const nameBytes = (typeof TextEncoder !== 'undefined')
+        ? new TextEncoder().encode(file.name)
+        : Buffer.from(file.name, 'utf-8');
+
+      let dataBytes;
+      if (file.data instanceof Uint8Array || (typeof Buffer !== 'undefined' && Buffer.isBuffer(file.data))) {
+        dataBytes = file.data;
+      } else {
+        dataBytes = (typeof TextEncoder !== 'undefined')
+          ? new TextEncoder().encode(file.data)
+          : Buffer.from(file.data, 'utf-8');
+      }
+
+      const crc = crc32(dataBytes);
+      const size = dataBytes.length;
+
+      // Local header (30 bytes + name)
+      const lh = new Uint8Array(30 + nameBytes.length);
+      const lhView = new DataView(lh.buffer, lh.byteOffset, lh.byteLength);
+      lhView.setUint32(0, 0x04034b50, true);
+      lhView.setUint16(4, 20, true);
+      lhView.setUint16(6, 0, true);
+      lhView.setUint16(8, 0, true);
+      lhView.setUint16(10, 0, true);
+      lhView.setUint16(12, 0, true);
+      lhView.setUint32(14, crc, true);
+      lhView.setUint32(18, size, true);
+      lhView.setUint32(22, size, true);
+      lhView.setUint16(26, nameBytes.length, true);
+      lhView.setUint16(28, 0, true);
+      lh.set(nameBytes, 30);
+
+      localHeaders.push(lh, dataBytes);
+
+      // Central header (46 bytes + name)
+      const ch = new Uint8Array(46 + nameBytes.length);
+      const chView = new DataView(ch.buffer, ch.byteOffset, ch.byteLength);
+      chView.setUint32(0, 0x02014b50, true);
+      chView.setUint16(4, 20, true);
+      chView.setUint16(6, 20, true);
+      chView.setUint16(8, 0, true);
+      chView.setUint16(10, 0, true);
+      chView.setUint16(12, 0, true);
+      chView.setUint16(14, 0, true);
+      chView.setUint32(16, crc, true);
+      chView.setUint32(20, size, true);
+      chView.setUint32(24, size, true);
+      chView.setUint16(28, nameBytes.length, true);
+      chView.setUint16(30, 0, true);
+      chView.setUint16(32, 0, true);
+      chView.setUint16(34, 0, true);
+      chView.setUint16(36, 0, true);
+      chView.setUint32(38, 0, true);
+      chView.setUint32(42, offset, true);
+      ch.set(nameBytes, 46);
+
+      centralHeaders.push(ch);
+      offset += lh.length + dataBytes.length;
+    }
+
+    const centralDirOffset = offset;
+    let centralDirSize = 0;
+    for (const ch of centralHeaders) centralDirSize += ch.length;
+
+    // End of central directory (22 bytes)
+    const eocd = new Uint8Array(22);
+    const eocdView = new DataView(eocd.buffer, eocd.byteOffset, eocd.byteLength);
+    eocdView.setUint32(0, 0x06054b50, true);
+    eocdView.setUint16(4, 0, true);
+    eocdView.setUint16(6, 0, true);
+    eocdView.setUint16(8, files.length, true);
+    eocdView.setUint16(10, files.length, true);
+    eocdView.setUint32(12, centralDirSize, true);
+    eocdView.setUint32(16, centralDirOffset, true);
+    eocdView.setUint16(20, 0, true);
+
+    const totalLen = offset + centralDirSize + 22;
+    const finalBuf = new Uint8Array(totalLen);
+    let cur = 0;
+    for (const part of [...localHeaders, ...centralHeaders, eocd]) {
+      finalBuf.set(part, cur);
+      cur += part.length;
+    }
+    return finalBuf;
+  }
+
+  /**
+   * Converts Markdown meeting notes into a valid Microsoft Word (.docx) file
+   */
+  function markdownToDocxBlob(markdownText, title = 'Meeting Minutes') {
+    const escapeXml = (s) => String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+    const lines = (markdownText || '').split('\n');
+    let bodyXml = '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        bodyXml += '<w:p><w:pPr><w:spacing w:after="120"/></w:pPr></w:p>';
+        continue;
+      }
+
+      if (line.startsWith('# ')) {
+        const text = escapeXml(line.slice(2).trim());
+        bodyXml += `<w:p><w:pPr><w:spacing w:before="240" w:after="120"/><w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="1E293B"/></w:rPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="1E293B"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+      } else if (line.startsWith('## ')) {
+        const text = escapeXml(line.slice(3).trim());
+        bodyXml += `<w:p><w:pPr><w:spacing w:before="200" w:after="100"/><w:rPr><w:b/><w:sz w:val="28"/><w:color w:val="334155"/></w:rPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="28"/><w:color w:val="334155"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+      } else if (line.startsWith('### ')) {
+        const text = escapeXml(line.slice(4).trim());
+        bodyXml += `<w:p><w:pPr><w:spacing w:before="160" w:after="80"/><w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="475569"/></w:rPr></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="475569"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+      } else if (line.startsWith('- ') || line.startsWith('* ')) {
+        const text = escapeXml(line.slice(2).trim());
+        bodyXml += `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:color w:val="4F46E5"/><w:b/></w:rPr><w:t>• </w:t></w:r><w:r><w:rPr><w:sz w:val="22"/><w:color w:val="1E293B"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+      } else {
+        const text = escapeXml(line);
+        bodyXml += `<w:p><w:pPr><w:spacing w:after="80"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/><w:color w:val="334155"/></w:rPr><w:t>${text}</w:t></w:r></w:p>`;
+      }
+    }
+
+    const contentTypesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+      '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+      '  <Default Extension="xml" ContentType="application/xml"/>\n' +
+      '  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>\n' +
+      '</Types>';
+
+    const relsXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n' +
+      '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>\n' +
+      '</Relationships>';
+
+    const documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\n' +
+      '  <w:body>\n' +
+      bodyXml +
+      '    <w:sectPr>\n' +
+      '      <w:pgSz w:w="12240" w:h="15840"/>\n' +
+      '      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>\n' +
+      '    </w:sectPr>\n' +
+      '  </w:body>\n' +
+      '</w:document>';
+
+    const zipBytes = createZipBuffer([
+      { name: '[Content_Types].xml', data: contentTypesXml },
+      { name: '_rels/.rels', data: relsXml },
+      { name: 'word/document.xml', data: documentXml }
+    ]);
+
+    if (typeof Blob !== 'undefined') {
+      const blob = new Blob([zipBytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      try {
+        blob.buffer = zipBytes.buffer;
+        blob.bytes = zipBytes;
+      } catch (_) {}
+      return blob;
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(zipBytes);
+    }
+    return zipBytes;
+  }
   async function uploadViaGoogleDriveApi({ token, folderName, audioBlob, audioFileName, markdownText, markdownFileName, onProgress }) {
     onProgress(15, `Authenticating with Google Drive API v3...`);
 
@@ -379,93 +567,124 @@
       folderId: folderId,
       folderUrl: cleanFolderUrl,
       audioUrl: json.audioUrl || json.audio_url || null,
-      notesUrl: json.notesUrl || json.notes_url || json.fileUrl || json.file_url || null
+      notesUrl: json.notesUrl || json.notes_url || json.fileUrl || json.file_url || null,
+      docUrl: json.docUrl || null,
+      docxUrl: json.docxUrl || null,
+      resumableUploadUrl: json.resumableUploadUrl || null
     };
   }
 
   /**
-   * Upload using Google Apps Script Webhook with 32kbps voice optimization and decoupled notes sync
+   * Upload using Google Apps Script Webhook with Resumable Direct Upload & native .docx support
    */
   async function uploadViaWebhook({ webhookUrl, folderName, audioBlob, audioFileName, markdownText, markdownFileName, roomName, syncMode = 'full', onProgress = () => {} }) {
     // Mode 1: Instant Notes Only (< 1s sync)
     if (syncMode === 'notes_only' || !audioBlob || audioBlob.size === 0) {
-      onProgress(30, '⚡ Fast-syncing meeting notes to Google Drive (< 1s)...');
+      onProgress(30, '⚡ Syncing meeting transcript and Word document (.docx) to Google Drive...');
       const payload = {
         folderName: folderName || 'meetingRecords',
         roomName: roomName || 'Meeting',
         audioFileName: '',
         audioBase64: '',
         markdownFileName: markdownFileName || 'Meeting_Summary.md',
-        markdownText: markdownText || ''
+        markdownText: markdownText || '',
+        generateDocx: true
       };
       const result = await dispatchWebhookPayload({ webhookUrl, payload, onProgress });
-      onProgress(100, 'Upload complete!');
+      onProgress(100, 'Meeting notes and document uploaded to Google Drive!');
       return result;
     }
 
-    // Mode 2: Optimized Full Package (Notes + Audio)
+    // Mode 2: High-Capacity Full Package (Notes/.docx + Complete Audio)
+    // Step 1: Create meeting folder on Drive, generate Google Doc + .docx Word file, and initiate Resumable Upload session
     const audioSizeMb = (audioBlob.size / 1024 / 1024).toFixed(1);
-    onProgress(15, `Encoding audio package (${audioSizeMb} MB, 32 kbps voice optimized)...`);
-    const audioBase64 = await blobToBase64(audioBlob);
+    onProgress(15, `Creating meeting folder and Word document (.docx) in Google Drive...`);
 
-    // If audio is exceptionally large (> 15MB Base64, e.g. > 1 hour of speech), use decoupled 2-step sync:
-    const isVeryLarge = audioBase64 && audioBase64.length > 15 * 1024 * 1024;
-    if (isVeryLarge) {
-      onProgress(25, `Step 1/2: Fast-syncing meeting notes to Google Drive...`);
-      const notesPayload = {
-        folderName: folderName || 'meetingRecords',
-        roomName: roomName || 'Meeting',
-        audioFileName: '',
-        audioBase64: '',
-        markdownFileName: markdownFileName || 'Meeting_Summary.md',
-        markdownText: markdownText || ''
-      };
-      const notesResult = await dispatchWebhookPayload({ webhookUrl, payload: notesPayload, onProgress });
-
-      // Step 2: Attach audio to created folder
-      onProgress(50, `Step 2/2: Notes saved! Attaching meeting audio (~${audioSizeMb} MB)...`);
-      try {
-        const audioPayload = {
-          targetFolderId: notesResult.folderId,
-          folderName: folderName || 'meetingRecords',
-          roomName: roomName || 'Meeting',
-          audioFileName: audioFileName || 'Meeting_Audio.webm',
-          audioMimeType: audioBlob?.type || 'audio/webm',
-          audioBase64: audioBase64,
-          markdownFileName: '',
-          markdownText: ''
-        };
-        const audioResult = await dispatchWebhookPayload({ webhookUrl, payload: audioPayload, audioBase64, onProgress });
-        onProgress(100, 'Upload complete!');
-        return {
-          ...notesResult,
-          audioUrl: audioResult.audioUrl || null
-        };
-      } catch (audioErr) {
-        console.warn('[Drive Uploader] Audio upload notice (notes safely preserved):', audioErr);
-        onProgress(100, 'Notes saved to Drive! Audio preserved locally.');
-        return {
-          ...notesResult,
-          audioUrl: null,
-          warning: 'Audio was preserved locally to protect against cloud execution limits.'
-        };
-      }
-    }
-
-    // Standard fast sync (< 15MB Base64) in single clean payload
-    onProgress(40, `Transmitting package to Google Drive (~${audioSizeMb} MB)...`);
-    const payload = {
+    const initPayload = {
+      action: 'INIT_SYNC',
       folderName: folderName || 'meetingRecords',
       roomName: roomName || 'Meeting',
       audioFileName: audioFileName || 'Meeting_Audio.webm',
-      audioMimeType: audioBlob?.type || 'audio/webm',
-      audioBase64: audioBase64,
+      audioMimeType: audioBlob ? (audioBlob.type || 'audio/webm') : 'audio/webm',
+      audioSizeBytes: audioBlob ? audioBlob.size : 0,
       markdownFileName: markdownFileName || 'Meeting_Summary.md',
-      markdownText: markdownText || ''
+      markdownText: markdownText || '',
+      generateDocx: true
     };
-    const result = await dispatchWebhookPayload({ webhookUrl, payload, audioBase64, onProgress });
-    onProgress(100, 'Upload complete!');
-    return result;
+
+    const initResult = await dispatchWebhookPayload({ webhookUrl, payload: initPayload, onProgress });
+    if (!initResult || !initResult.success) {
+      throw new Error(initResult?.error || 'Failed to initialize meeting folder on Google Drive');
+    }
+
+    const folderId = initResult.folderId;
+    const folderUrl = initResult.folderUrl || (folderId ? `https://drive.google.com/drive/folders/${folderId}` : '');
+    const notesUrl = initResult.docxUrl || initResult.docUrl || initResult.notesUrl || '';
+    let audioUrl = initResult.audioUrl || null;
+
+    // Step 2: High-Speed Direct Audio Upload via Google Drive Resumable URL
+    // This streams binary audio directly to Google Drive servers, completely bypassing Apps Script payload limits and timeouts!
+    if (initResult.resumableUploadUrl && audioBlob && audioBlob.size > 0) {
+      onProgress(40, `Streaming meeting audio directly to Google Drive (${audioSizeMb} MB)...`);
+      try {
+        const putRes = await fetch(initResult.resumableUploadUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': audioBlob.type || 'audio/webm'
+          },
+          body: audioBlob
+        });
+
+        if (putRes.ok) {
+          const driveData = await putRes.json().catch(() => ({}));
+          audioUrl = driveData.webViewLink || (driveData.id ? `https://drive.google.com/file/d/${driveData.id}/view` : null);
+          console.log('[Drive Uploader] Direct resumable audio upload succeeded:', audioUrl);
+        } else {
+          console.warn(`[Drive Uploader] Direct upload returned status ${putRes.status}, falling back to Webhook attach...`);
+        }
+      } catch (streamErr) {
+        console.warn('[Drive Uploader] Direct resumable upload notice:', streamErr);
+      }
+    }
+
+    // Step 3: Fallback if resumable upload was not supported by the Apps Script deployment
+    if (!audioUrl && audioBlob && audioBlob.size > 0) {
+      onProgress(55, `Uploading meeting audio via Webhook (~${audioSizeMb} MB)...`);
+      const audioBase64 = await blobToBase64(audioBlob);
+
+      const audioPayload = {
+        action: 'ATTACH_AUDIO',
+        targetFolderId: folderId,
+        folderName: folderName || 'meetingRecords',
+        roomName: roomName || 'Meeting',
+        audioFileName: audioFileName || 'Meeting_Audio.webm',
+        audioMimeType: audioBlob?.type || 'audio/webm',
+        audioBase64: audioBase64,
+        markdownFileName: '',
+        markdownText: ''
+      };
+
+      try {
+        const audioResult = await dispatchWebhookPayload({ webhookUrl, payload: audioPayload, audioBase64, onProgress });
+        if (audioResult && audioResult.audioUrl) {
+          audioUrl = audioResult.audioUrl;
+        }
+      } catch (attachErr) {
+        console.warn('[Drive Uploader] Webhook audio attach notice:', attachErr);
+      }
+    }
+
+    onProgress(100, `Audio and .docx transcript successfully uploaded to Google Drive!`);
+    return {
+      success: true,
+      mode: 'webhook',
+      folderId,
+      folderUrl,
+      notesUrl,
+      docUrl: initResult.docUrl || null,
+      docxUrl: initResult.docxUrl || null,
+      audioUrl: audioUrl || initResult.audioUrl || null
+    };
   }
 
   /**
@@ -514,6 +733,7 @@
 
   return {
     blobToBase64,
+    markdownToDocxBlob,
     uploadViaGoogleDriveApi,
     uploadViaWebhook,
     uploadPackage

@@ -4,8 +4,28 @@
  * Supports streaming chunk port protocol to bypass Chrome's 64MiB sendMessage IPC limit
  */
 
+// ─── Service Worker Keepalive (Chrome MV3 Fix) ───────────────────────────────
+// Chrome MV3 service workers are killed after ~30s of inactivity.
+// During a 90-second Gemini API call, the worker can be terminated mid-request,
+// orphaning the sendMessage callback and causing infinite "Transcribing..." hangs.
+// We use chrome.alarms (the only persistent MV3 mechanism) to ping the worker every 20s.
+if (typeof chrome !== 'undefined' && chrome.alarms) {
+  chrome.alarms.create('sw_keepalive', { periodInMinutes: 1 / 3 }); // Every 20s
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'sw_keepalive') {
+      // No-op: just receiving this alarm wakes the service worker
+    }
+  });
+}
+
 // 1. One-shot message listener for standard operations
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Keepalive ping from content.js — responds immediately to wake/keep the worker alive
+  if (request.action === 'KEEPALIVE') {
+    sendResponse({ alive: true, timestamp: Date.now() });
+    return false;
+  }
+
   if (request.action === 'GEMINI_TRANSCRIBE') {
     handleGeminiTranscription(request)
       .then(result => sendResponse({ success: true, data: result }))
@@ -227,6 +247,8 @@ async function handleSlackNotification({
   roomName,
   folderUrl,
   notesUrl,
+  docxUrl,
+  docUrl,
   audioUrl,
   decisions = [],
   actions = [],
@@ -244,6 +266,17 @@ async function handleSlackNotification({
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
   const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const targetFolderUrl = folderUrl || 'https://drive.google.com/drive/search?q=meetingRecords';
+
+  // Construct direct document & audio links if available
+  const fileLinks = [];
+  const activeDocx = docxUrl || notesUrl || docUrl;
+  if (activeDocx) {
+    fileLinks.push(`<${activeDocx}|📄 Meeting Transcript (.docx)>`);
+  }
+  if (audioUrl) {
+    fileLinks.push(`<${audioUrl}|🎙️ Meeting Audio Recording>`);
+  }
+  const fileLinksText = fileLinks.length > 0 ? `\n*Files:* ${fileLinks.join('  •  ')}` : '';
 
   // Construct Block Kit message blocks
   const blocks = [
@@ -268,7 +301,7 @@ async function handleSlackNotification({
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*Google Drive Meeting Folder:*\n<${targetFolderUrl}|📂 View All Meeting Files in Google Drive>`
+        text: `*Google Drive Meeting Folder:*\n<${targetFolderUrl}|📂 View All Meeting Files in Google Drive>${fileLinksText}`
       },
       accessory: {
         type: 'button',
@@ -341,16 +374,28 @@ async function handleSlackNotification({
 const DEFAULT_GEMINI_KEY = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || ''; // use your Gemini Flash API key
 
 // Active production models from Google with verified audio multimodal support
-// gemini-2.0-flash-lite is prioritized as the most durable, lowest-503 model for high-throughput speech audio
+// gemini-2.5-flash is prioritized as primary — confirmed audio support; newer models cascade as fallback
 const ACTIVE_GEMINI_MODELS = [
-  'gemini-2.0-flash-lite',
   'gemini-2.5-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-2.0-flash'
+  'gemini-3.5-flash',
+  'gemini-3.7-flash',
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite'
 ];
 
 let lastWorkingAudioModel = null;
+
+// Restore last working audio model from persistent storage so service worker wakeups don't lose fast-path
+if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+  try {
+    chrome.storage.local.get(['jitsi_last_working_audio_model'], (res) => {
+      if (res && res.jitsi_last_working_audio_model) {
+        lastWorkingAudioModel = res.jitsi_last_working_audio_model;
+        console.log(`[Gemini Background] Restored sticky audio model: ${lastWorkingAudioModel}`);
+      }
+    });
+  } catch (e) {}
+}
 
 function getOrderedAudioModels() {
   if (lastWorkingAudioModel && ACTIVE_GEMINI_MODELS.includes(lastWorkingAudioModel)) {
@@ -362,23 +407,29 @@ function getOrderedAudioModels() {
 // Compatibility cascade for text synthesis & test assertions
 const GEMINI_MODELS = [
   'gemini-2.5-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
-  'gemini-2.0-flash',
-  'gemini-3.6-flash',
-  'gemini-flash-latest',
-  'gemini-3.1-flash-lite'
+  'gemini-3.5-flash',
+  'gemini-3.7-flash',
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite'
 ];
 
 async function fetchWithBackoff(url, options, maxRetries = 1) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Per-request timeout: abort Gemini call after 35s (5m audio takes 6-12s on Flash)
+    // If a model doesn't respond in 35s, it is congested — abort & cascade immediately
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, 35000); // 35 seconds per model attempt
+
     try {
-      const response = await fetch(url, options);
-      const isTransient = response.status === 500 || 
-                          response.status === 502 || 
-                          response.status === 503 || 
-                          response.status === 504 || 
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      const isTransient = response.status === 500 ||
+                          response.status === 502 ||
+                          response.status === 503 ||
+                          response.status === 504 ||
                           response.status === 429;
 
       if (isTransient && attempt < maxRetries) {
@@ -390,6 +441,10 @@ async function fetchWithBackoff(url, options, maxRetries = 1) {
       }
       return response;
     } catch (networkErr) {
+      clearTimeout(timeoutId);
+      if (networkErr.name === 'AbortError') {
+        throw new Error(`Gemini API request timed out after 35s (model may be overloaded). Cascading to next model.`);
+      }
       if (attempt < maxRetries) {
         const delay = 1000 * (attempt + 1);
         console.warn(`[Gemini Background] Network error (${networkErr.message}). Retrying in ${delay}ms...`);
@@ -533,10 +588,17 @@ async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, c
     return { chunkIndex, transcript: '' };
   }
 
-  const promptText = `You are a high-accuracy meeting transcriber.
-This is Audio Segment #${chunkIndex + 1} of ${totalChunks} (Time window: ${startTime || '00:00'} - ${endTime || '00:00'}) for meeting room "${roomName || 'Meeting'}".
-Transcribe this entire audio segment verbatim with speaker identification and timestamps.
-Return ONLY the timestamped transcript text. Do not add conversational intro/outro.`;
+  const promptText = `You are a high-accuracy professional meeting transcriber.
+This is Audio Segment #${chunkIndex + 1} (Time window: ${startTime || '00:00'} - ${endTime || '00:00'}) for meeting room "${roomName || 'Meeting'}".
+
+IMPORTANT INSTRUCTIONS:
+- Transcribe ALL speech in this audio, including quiet, fast, or accented speech.
+- Include every word spoken, even if audio quality is imperfect.
+- Format each line as: [MM:SS] Speaker: "spoken words"
+- If multiple people speak, identify them as Speaker 1, Speaker 2, etc.
+- If the audio contains no speech at all (complete silence), respond with exactly: [SILENCE]
+- Do NOT say the audio is empty if you can detect ANY speech.
+- Do NOT add conversational intro, outro, or commentary.`;
 
   const payload = {
     contents: [
@@ -563,7 +625,7 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
+      }, 0); // 0 retries per model: cascade instantly to next model if transient error occurs
 
       if (!response.ok) {
         let errMsg = `Model ${model} returned (${response.status})`;
@@ -588,9 +650,22 @@ Return ONLY the timestamped transcript text. Do not add conversational intro/out
       }
 
       const data = await response.json();
-      const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      const rawTranscript = (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+
+      // If Gemini explicitly says [SILENCE] or returns empty, cascade to next model
+      // before giving up — another model may decode the audio codec differently.
+      if (!rawTranscript || rawTranscript === '[SILENCE]') {
+        console.warn(`[Gemini Background] Model ${model} returned empty/silence for chunk #${chunkIndex}. Trying next model...`);
+        lastError = new Error(`Model ${model} returned empty transcript for chunk #${chunkIndex}`);
+        continue;
+      }
+
       lastWorkingAudioModel = model;
-      return { chunkIndex, transcript: transcript.trim(), modelUsed: model };
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        try { chrome.storage.local.set({ jitsi_last_working_audio_model: model }); } catch (e) {}
+      }
+      console.log(`[Gemini Background] Chunk #${chunkIndex} transcribed via ${model} (${rawTranscript.length} chars).`);
+      return { chunkIndex, transcript: rawTranscript, modelUsed: model };
     } catch (err) {
       if (err.message.includes('Invalid Gemini API key')) {
         throw err; // Fail fast on invalid key, do not waste time cycling models
@@ -616,12 +691,12 @@ async function handleGeminiTestKey({ apiKey }) {
     contents: [{ parts: [{ text: 'Hello, respond with: OK' }] }]
   };
 
-  // Test against universally available GA models first (gemini-1.5-flash, gemini-2.0-flash)
+  // Test against current GA models in priority order
   const testModels = [
-    'gemini-1.5-flash',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-1.5-flash-8b'
+    'gemini-2.5-flash',
+    'gemini-3.5-flash',
+    'gemini-3.7-flash',
+    'gemini-3.8-flash'
   ];
 
   let lastErr = null;

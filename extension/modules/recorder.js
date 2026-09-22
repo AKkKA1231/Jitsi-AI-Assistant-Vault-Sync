@@ -157,11 +157,14 @@
         recordedChunks.push(event.data);
         currentBlockChunks.push(event.data);
 
-        // Cache the WebM container header (EBML + Segment + Tracks) from the first few chunks
-        if (!cachedWebmHeader && recordedChunks.length <= 3) {
+        // Cache the WebM container header (EBML + Segment + Tracks) from any early chunk.
+        // Keep trying until we successfully extract it — no chunk-count limit.
+        // Without this header, Block #2, #3, etc. are raw Clusters that Gemini cannot decode.
+        if (!cachedWebmHeader) {
           extractWebmHeader(event.data).then((hdr) => {
             if (hdr && hdr.size > 0 && !cachedWebmHeader) {
               cachedWebmHeader = hdr;
+              console.log(`[Recorder] WebM container header cached from chunk #${recordedChunks.length} (${hdr.size} bytes). Future blocks are safe.`);
             }
           }).catch((err) => {
             console.warn('[Recorder] Header extraction notice:', err);

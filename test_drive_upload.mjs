@@ -450,6 +450,113 @@ it('Should verify extension content.js contains Webhook and OAuth input handlers
   assert.ok(contentJs.includes('Local Backup Saved'), 'content.js must display transparent message when unconfigured');
 });
 
+// ---------------------------------------------------------------------------
+// 7. Native .docx Word Document & Resumable Direct Upload Pipeline
+// ---------------------------------------------------------------------------
+console.log('\n--- Test Group 7: Native .docx Word Document & Resumable Direct Upload ---');
+
+it('Should export markdownToDocxBlob and generate valid OpenXML .docx file', () => {
+  assert.strictEqual(typeof uploader.markdownToDocxBlob, 'function', 'markdownToDocxBlob must be exported');
+
+  const testMd = `# Executive Meeting Minutes
+## Key Decisions
+- Adopted Resumable Upload pipeline for 70+ minute meetings
+- Transcripts saved as native .docx Word Documents
+
+## Action Items
+- Akhtar to test Drive and Slack pipeline
+
+[00:00] Speaker 1: "Meeting is officially underway."`;
+
+  const docxData = uploader.markdownToDocxBlob(testMd, 'Test Meeting');
+  assert.ok(docxData, 'Must produce docx data');
+
+  const buf = Buffer.isBuffer(docxData) ? docxData : (docxData.buffer ? Buffer.from(docxData.buffer) : Buffer.from(docxData));
+  assert.ok(buf.length > 500, 'Docx buffer must be non-empty');
+
+  // Verify PKZIP magic bytes (0x04034b50)
+  assert.strictEqual(buf[0], 0x50, 'PK header byte 1');
+  assert.strictEqual(buf[1], 0x4b, 'PK header byte 2');
+  assert.strictEqual(buf[2], 0x03, 'PK header byte 3');
+  assert.strictEqual(buf[3], 0x04, 'PK header byte 4');
+
+  // Verify internal OpenXML entries
+  const str = buf.toString('utf-8');
+  assert.ok(str.includes('[Content_Types].xml'), 'Must include [Content_Types].xml');
+  assert.ok(str.includes('word/document.xml'), 'Must include word/document.xml');
+  assert.ok(str.includes('_rels/.rels'), 'Must include _rels/.rels');
+});
+
+await itAsync('Should execute Resumable Direct Upload when Webhook returns resumableUploadUrl', async () => {
+  const originalFetch = globalThis.fetch;
+  let putUrl = null;
+  let putMethod = null;
+  let putBody = null;
+
+  globalThis.fetch = async (url, options) => {
+    if (url.includes('script.google.com')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          folderId: 'folder_resumable_999',
+          folderUrl: 'https://drive.google.com/drive/folders/folder_resumable_999',
+          docUrl: 'https://docs.google.com/document/d/doc_999/edit',
+          docxUrl: 'https://drive.google.com/file/d/docx_999/view',
+          resumableUploadUrl: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=session_xyz_789'
+        })
+      };
+    }
+
+    if (url.includes('uploadType=resumable')) {
+      putUrl = url;
+      putMethod = options.method;
+      putBody = options.body;
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: 'audio_file_resumable_456',
+          webViewLink: 'https://drive.google.com/file/d/audio_file_resumable_456/view'
+        })
+      };
+    }
+
+    return originalFetch(url, options);
+  };
+
+  try {
+    const fake70MinBlob = new Blob(['BINARY_AUDIO_SIMULATING_70_MINUTES'], { type: 'audio/webm' });
+    const progressLog = [];
+
+    const result = await uploader.uploadPackage({
+      credentials: { webhookUrl: 'https://script.google.com/macros/s/AKfycb_resumable/exec' },
+      folderName: 'infotech_Meetings',
+      audioBlob: fake70MinBlob,
+      audioFileName: 'Meeting_Audio_70min.webm',
+      markdownText: '# Standup\n- Resumable direct upload verified',
+      markdownFileName: 'Meeting_Summary.docx',
+      roomName: 'infotech_Meetings',
+      onProgress: (pct, msg) => progressLog.push({ pct, msg })
+    });
+
+    assert.strictEqual(result.success, true, 'Result must be success');
+    assert.strictEqual(result.folderId, 'folder_resumable_999');
+    assert.strictEqual(result.folderUrl, 'https://drive.google.com/drive/folders/folder_resumable_999');
+    assert.ok(result.docxUrl.includes('docx_999'), 'Must include direct .docx Word document URL');
+    assert.ok(result.audioUrl.includes('audio_file_resumable_456'), 'Must include direct audio file URL');
+
+    // Verify direct binary PUT happened to Google Drive API
+    assert.ok(putUrl.includes('session_xyz_789'), 'Must PUT binary audio to resumable upload endpoint');
+    assert.strictEqual(putMethod, 'PUT');
+    assert.ok(putBody, 'Must send binary audio blob in PUT body');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 console.log(`\n========================================`);
 console.log(`Google Drive Test Results: ${passedTests}/${totalTests} passed`);
 console.log(`========================================\n`);

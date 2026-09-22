@@ -16,4 +16,5 @@ node_modules/
 test_screenshots/
 demo_video/
 *.log
+.vscode/
 

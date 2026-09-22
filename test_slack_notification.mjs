@@ -29,8 +29,10 @@ console.log('\n--- Test Group 2: Slack Block Kit Payload & Drive URL Integration
   assert.ok(bgCode.includes('handleSlackNotification'), 'background.js must define handleSlackNotification');
   assert.ok(bgCode.includes('https://hooks.slack.com/'), 'background.js must validate https://hooks.slack.com/ prefix');
   assert.ok(bgCode.includes('open_drive_folder'), 'background.js must include clickable Open in Drive action');
+  assert.ok(bgCode.includes('Meeting Transcript (.docx)'), 'background.js must include direct Word .docx document link');
+  assert.ok(bgCode.includes('Meeting Audio Recording'), 'background.js must include direct audio recording link');
   
-  console.log('  ✅ PASS: Verified SLACK_SEND_NOTIFICATION handler and Block Kit schema in background.js');
+  console.log('  ✅ PASS: Verified SLACK_SEND_NOTIFICATION handler, Block Kit schema, and .docx/audio links in background.js');
 }
 
 // ----------------------------------------------------
@@ -58,9 +60,16 @@ console.log('\n--- Test Group 4: Block Kit Payload Structure Simulation ---');
 {
   const roomName = 'Sprint Planning & Release';
   const folderUrl = 'https://drive.google.com/drive/folders/1nk1cgecVxPaK_WxDh6WShZ_7kXdhzGDj';
+  const docxUrl = 'https://drive.google.com/file/d/docx_sample_123/view';
+  const audioUrl = 'https://drive.google.com/file/d/audio_sample_456/view';
   const decisions = ['Agreed to launch v1.2 next Tuesday', 'Vault sync confirmed zero-loss'];
   const actions = ['Akhtar to deploy Web App webhook', 'Review test matrix'];
   const executiveSummary = 'The team reviewed sprint items and confirmed deployment timeline.';
+
+  const fileLinks = [];
+  if (docxUrl) fileLinks.push(`<${docxUrl}|📄 Meeting Transcript (.docx)>`);
+  if (audioUrl) fileLinks.push(`<${audioUrl}|🎙️ Meeting Audio Recording>`);
+  const fileLinksText = fileLinks.length > 0 ? `\n*Files:* ${fileLinks.join('  •  ')}` : '';
 
   const blocks = [
     {
@@ -69,7 +78,7 @@ console.log('\n--- Test Group 4: Block Kit Payload Structure Simulation ---');
     },
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `*Google Drive Meeting Folder:*\n<${folderUrl}|📂 View All Meeting Files in Google Drive>` },
+      text: { type: 'mrkdwn', text: `*Google Drive Meeting Folder:*\n<${folderUrl}|📂 View All Meeting Files in Google Drive>${fileLinksText}` },
       accessory: {
         type: 'button',
         text: { type: 'plain_text', text: '📂 Open in Drive', emoji: true },
@@ -83,8 +92,12 @@ console.log('\n--- Test Group 4: Block Kit Payload Structure Simulation ---');
   assert.strictEqual(blocks[0].type, 'header');
   assert.strictEqual(blocks[1].accessory.url, folderUrl);
   assert(blocks[1].text.text.includes(folderUrl));
+  assert(blocks[1].text.text.includes(docxUrl));
+  assert(blocks[1].text.text.includes(audioUrl));
+  assert(blocks[1].text.text.includes('Meeting Transcript (.docx)'));
+  assert(blocks[1].text.text.includes('Meeting Audio Recording'));
 
-  console.log('  ✅ PASS: Simulated Block Kit payload generates compliant header and clickable Drive button');
+  console.log('  ✅ PASS: Simulated Block Kit payload generates compliant header, clickable Drive button, and verified .docx/audio links');
 }
 
 // ----------------------------------------------------

@@ -19,14 +19,11 @@
   const STORAGE_ACTIVE_KEY = 'jitsi_plugin_active_idx_v3';
   const STORAGE_AI_KEY = 'jitsi_plugin_gemini_key';
   const GEMINI_CASCADE = [
-    'gemini-2.0-flash-lite',
     'gemini-2.5-flash',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-8b',
-    'gemini-2.0-flash',
-    'gemini-3.6-flash',
-    'gemini-flash-latest',
-    'gemini-3.1-flash-lite'
+    'gemini-3.5-flash',
+    'gemini-3.7-flash',
+    'gemini-3.8-flash',
+    'gemini-3.5-flash-lite'
   ];
 
   const DEFAULT_ACCOUNTS = [
@@ -533,6 +530,15 @@
 
           // 2. Preemptively transcribe in background with Web Speech STT fallback
           const activeKey = (geminiApiKey || DEFAULT_GEMINI_KEY || '').trim();
+
+          // Wake the MV3 service worker before dispatching so the sendMessage callback
+          // isn't dropped into a terminated/sleeping worker (Chrome MV3 idle kill ≈30s).
+          try {
+            chrome.runtime.sendMessage({ action: 'KEEPALIVE' }, () => {
+              if (chrome.runtime.lastError) {} // suppress "no listener" warning on first wake
+            });
+          } catch (e) {}
+
           Transcriber.transcribeSingleBlock(sealedBlock, {
             apiKey: activeKey,
             roomName: room,
@@ -680,7 +686,10 @@
    * Merges all precomputed background transcripts and transcribes only the final partial block.
    */
   async function executeParallelTranscription({ forceRetry = false } = {}) {
-    if (isTranscribing) return;
+    if (isTranscribing) {
+      console.warn('[Transcription] Already in progress — skipping duplicate call.');
+      return;
+    }
     isTranscribing = true;
 
     try {
@@ -712,17 +721,39 @@
         onProgress: (pct, msg) => {
           const statusEl = getEl('jitsiUploadStatusText');
           if (statusEl) statusEl.textContent = msg;
+        },
+        // Show a visible amber toast if AI executive summary synthesis failed
+        onSynthesisError: (errMsg) => {
+          showToast(`⚠️ AI summary unavailable (${errMsg}). Keyword notes extracted from transcript.`, true);
         }
       });
 
       meetingSummaryMarkdown = transcriptionResult.markdown;
       UI.renderMeetingNotes(transcriptionResult.decisions, transcriptionResult.actions, transcriptionResult.transcriptText);
 
+      // Refresh all block cards in the sidebar drawer so every block displays ✅ Transcribed with quotes
+      for (const b of logicalBlocks) {
+        const res = activeMeetingBlockTranscripts[b.index];
+        if (res) {
+          if (res.isFailed) {
+            UI.updateBlockStatus(b.index, 'error', res.error || 'Transcription failed', () => retrySingleBlock(b.index));
+          } else {
+            UI.updateBlockStatus(b.index, 'completed', res.transcript);
+          }
+        }
+      }
+      updateRetryFailedBtnVisibility();
+
       if (Vault.markVaultSessionCompleted) {
         Vault.markVaultSessionCompleted();
       }
 
-      showToast('✅ AI Transcription & executive synthesis completed!');
+      // Success toast: distinguish full AI notes vs heuristic fallback
+      if (transcriptionResult.synthesisUsedFallback) {
+        showToast('✅ Transcription done. Note: AI executive summary failed — keyword notes used instead.', true);
+      } else {
+        showToast('✅ AI Transcription & executive synthesis completed!');
+      }
     } catch (err) {
       console.error('Transcription error:', err);
       showToast(`Transcription error: ${err.message}`, true);
@@ -768,6 +799,17 @@
         UI.setRecordButtonState('record_again');
       }
 
+      // Wait for any in-flight background transcription to finish before uploading,
+      // so we never upload an empty notes file to Drive.
+      if (isTranscribing) {
+        console.log('[Drive Upload] Transcription in-flight — waiting before upload...');
+        await new Promise((resolve) => {
+          const poll = setInterval(() => {
+            if (!isTranscribing) { clearInterval(poll); resolve(); }
+          }, 500);
+        });
+      }
+
       if (!meetingSummaryMarkdown || !meetingSummaryMarkdown.trim() || !compiledAudioBlob) {
         await executeParallelTranscription();
       }
@@ -810,8 +852,8 @@
         const folderUrl = result.folderUrl || (result.folderId ? `https://drive.google.com/drive/folders/${result.folderId}` : dedicatedFolderFallback);
         lastUploadedFolderUrl = folderUrl;
         const successMsg = isNotesOnly
-          ? `✅ <strong>Success!</strong> Meeting notes synced to Google Drive (instant &lt; 1s mode). Local audio saved.`
-          : `✅ <strong>Success!</strong> Audio &amp; notes uploaded to Google Drive: <code>${UI.escapeHtml(acc.folderName)}</code>.`;
+          ? `✅ <strong>Success!</strong> Meeting transcript (.docx) synced to Google Drive (instant &lt; 1s mode). Local audio saved.`
+          : `✅ <strong>Success!</strong> Audio &amp; Word document (.docx) uploaded to Google Drive: <code>${UI.escapeHtml(acc.folderName)}</code>.`;
         if (statusText) statusText.innerHTML = successMsg;
         if (openDriveLink) {
           openDriveLink.href = folderUrl;
@@ -831,7 +873,13 @@
               UI.switchTab('settings');
               return;
             }
-            dispatchSlackNotification({ folderUrl, isManual: true });
+            dispatchSlackNotification({
+              folderUrl,
+              docxUrl: result.docxUrl,
+              docUrl: result.docUrl,
+              audioUrl: result.audioUrl,
+              isManual: true
+            });
           };
         }
 
@@ -841,16 +889,27 @@
         if (actionsArea) actionsArea.style.display = 'flex';
         showToast(`✅ Uploaded to Google Drive (${acc.name})!`);
 
-        // Automatic dispatch to Slack IF AND ONLY IF the checkbox in settings is ticked
+        // Automatic dispatch to Slack with verified Drive links
         if (isSlackSharePermitted() && savedSlackWebhookUrl) {
-          dispatchSlackNotification({ folderUrl, isManual: false });
+          dispatchSlackNotification({
+            folderUrl,
+            docxUrl: result.docxUrl,
+            docUrl: result.docUrl,
+            audioUrl: result.audioUrl,
+            isManual: false
+          });
         } else {
           console.log('[Slack] Automatic dispatch skipped because Share to Slack checkbox is unticked in Settings.');
         }
       } else if (result.isUnconfigured) {
-        // Safe offline preservation
+        // Safe offline preservation as Word document (.docx) and WebM audio
+        const docxFileName = `Meeting_Summary_${filenamePrefix}.docx`;
+        const docxBlob = (window.JitsiDriveUploader && window.JitsiDriveUploader.markdownToDocxBlob)
+          ? window.JitsiDriveUploader.markdownToDocxBlob(meetingSummaryMarkdown, room)
+          : new Blob([meetingSummaryMarkdown], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+
         if (compiledAudioBlob) triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
-        if (meetingSummaryMarkdown) triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+        if (meetingSummaryMarkdown) triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 
         if (progressBar) {
           progressBar.style.width = '100%';
@@ -858,9 +917,9 @@
         }
         if (statusText) {
           statusText.innerHTML = `
-            <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (Drive Unconnected)</div>
+            <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (.docx &amp; audio)</div>
             <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
-              Files downloaded to your computer. Connect Google Drive in <strong>Settings (⚙️)</strong> to enable cloud sync.
+              Files downloaded to your computer as <strong>.docx</strong> and <strong>.webm</strong>. Connect Google Drive in <strong>Settings (⚙️)</strong> to enable cloud sync.
             </div>
           `;
         }
@@ -870,14 +929,19 @@
         throw new Error(result.error || 'Upload failed');
       }
     } catch (err) {
+      const docxFileName = `Meeting_Summary_${filenamePrefix}.docx`;
+      const docxBlob = (window.JitsiDriveUploader && window.JitsiDriveUploader.markdownToDocxBlob)
+        ? window.JitsiDriveUploader.markdownToDocxBlob(meetingSummaryMarkdown, room)
+        : new Blob([meetingSummaryMarkdown], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+
       if (compiledAudioBlob) triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
-      if (meetingSummaryMarkdown) triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+      if (meetingSummaryMarkdown) triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 
       if (progressBar) {
         progressBar.style.width = '100%';
         progressBar.style.backgroundColor = '#ef4444';
       }
-      if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${UI.escapeHtml(err.message || err.toString())}. Local backup files downloaded.`;
+      if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${UI.escapeHtml(err.message || err.toString())}. Local backup files downloaded as .docx and .webm.`;
       if (actionsArea) actionsArea.style.display = 'flex';
       showToast(`Drive upload failed: ${err.message}`, true);
     } finally {
@@ -890,7 +954,7 @@
   /**
    * Dispatches meeting notes & Google Drive folder URL to Slack Webhook
    */
-  async function dispatchSlackNotification({ folderUrl, isManual = false } = {}) {
+  async function dispatchSlackNotification({ folderUrl, docxUrl, docUrl, audioUrl, isManual = false } = {}) {
     // Strictly verify permission: If automatic trigger and checkbox is unticked, NEVER hit webhook
     if (!isManual && !isSlackSharePermitted()) {
       console.log('[Slack Webhook] Blocked: Auto-share to Slack checkbox is unticked in Settings.');
@@ -932,6 +996,8 @@
             webhookUrl: savedSlackWebhookUrl,
             roomName: room,
             folderUrl: targetUrl,
+            docxUrl: docxUrl || docUrl || '',
+            audioUrl: audioUrl || '',
             decisions,
             actions,
             durationStr: cleanTime,
