@@ -909,7 +909,10 @@
           : new Blob([meetingSummaryMarkdown], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 
         if (compiledAudioBlob) triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
-        if (meetingSummaryMarkdown) triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        if (meetingSummaryMarkdown) {
+          triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+          triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        }
 
         if (progressBar) {
           progressBar.style.width = '100%';
@@ -917,9 +920,9 @@
         }
         if (statusText) {
           statusText.innerHTML = `
-            <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (.docx &amp; audio)</div>
+            <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">⚠️ Local Backup Saved (.md, .docx &amp; audio)</div>
             <div style="font-size:11px; color:#cbd5e1; margin-bottom:4px;">
-              Files downloaded to your computer as <strong>.docx</strong> and <strong>.webm</strong>. Connect Google Drive in <strong>Settings (⚙️)</strong> to enable cloud sync.
+              Files downloaded to your computer as <strong>.md</strong>, <strong>.docx</strong>, and <strong>.webm</strong>. Connect Google Drive in <strong>Settings (⚙️)</strong> to enable cloud sync.
             </div>
           `;
         }
@@ -935,13 +938,16 @@
         : new Blob([meetingSummaryMarkdown], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 
       if (compiledAudioBlob) triggerDownload(compiledAudioBlob, audioFileName, 'audio/webm');
-      if (meetingSummaryMarkdown) triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      if (meetingSummaryMarkdown) {
+        triggerDownload(meetingSummaryMarkdown, markdownFileName, 'text/markdown');
+        triggerDownload(docxBlob, docxFileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      }
 
       if (progressBar) {
         progressBar.style.width = '100%';
         progressBar.style.backgroundColor = '#ef4444';
       }
-      if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${UI.escapeHtml(err.message || err.toString())}. Local backup files downloaded as .docx and .webm.`;
+      if (statusText) statusText.innerHTML = `❌ <strong>Upload Error:</strong> ${UI.escapeHtml(err.message || err.toString())}. Local backup files downloaded (.md, .docx, .webm).`;
       if (actionsArea) actionsArea.style.display = 'flex';
       showToast(`Drive upload failed: ${err.message}`, true);
     } finally {
