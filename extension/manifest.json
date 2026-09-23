@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "alarms"
+    "alarms",
+    "tabCapture"
   ],
   "host_permissions": [
     "https://meet.jit.si/*",

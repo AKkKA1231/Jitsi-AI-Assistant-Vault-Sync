@@ -67,6 +67,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message || err.toString() }));
     return true;
   }
+
+  if (request.action === 'TAB_CAPTURE_STREAM_ID') {
+    // Return a serializable stream ID that content.js uses with getUserMedia({ chromeMediaSource: 'tab' })
+    // chrome.tabCapture.getMediaStreamId requires the tab to be the SENDER of the message
+    if (!chrome.tabCapture || !chrome.tabCapture.getMediaStreamId) {
+      sendResponse({ success: false, error: 'tabCapture API not available in this browser.' });
+      return false;
+    }
+    try {
+      chrome.tabCapture.getMediaStreamId(
+        { consumerTabId: sender.tab ? sender.tab.id : undefined },
+        (streamId) => {
+          if (chrome.runtime.lastError || !streamId) {
+            sendResponse({ success: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'tabCapture failed to generate stream ID.' });
+          } else {
+            sendResponse({ success: true, streamId });
+          }
+        }
+      );
+    } catch (e) {
+      sendResponse({ success: false, error: e.message || 'tabCapture exception.' });
+    }
+    return true; // async
+  }
 });
 
 // 2. Persistent streaming port listener to bypass Chrome's 64MiB IPC limit
@@ -456,7 +480,7 @@ async function fetchWithBackoff(url, options, maxRetries = 1) {
   }
 }
 
-async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName }) {
+async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomName, participantNames }) {
   const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
     throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
@@ -465,13 +489,17 @@ async function handleGeminiTranscription({ apiKey, base64Audio, mimeType, roomNa
     throw new Error('No audio data provided to transcribe.');
   }
 
+  const participantList = Array.isArray(participantNames) && participantNames.length > 0
+    ? `\n\nMeeting Participants (use these actual names instead of "Speaker N"):\n${participantNames.map((n, i) => `- ${n}${i === 0 ? ' (the local user running this recording)' : ''}`).join('\n')}\n`
+    : '';
+
   const promptText = `You are an expert executive meeting transcriber and secretary. 
 Listen carefully to this entire meeting audio recording (${roomName || 'Meeting'}).
-
+${participantList}
 Produce a structured markdown output with the following exact sections:
 
 ## 📝 Verbatim Spoken Transcript
-Write the full transcript of what was spoken by all participants with accurate timestamps and speaker identification (e.g. [00:05] Speaker 1: "...", [00:22] Speaker 2: "..."). Make sure all technical words, discussions, and decisions are accurately captured.
+Write the full transcript of what was spoken by all participants with accurate timestamps and speaker identification (e.g. [00:05] Speaker 1: "...", [00:22] Speaker 2: "..."). If participant names were provided above, use their actual names instead of "Speaker 1", "Speaker 2", etc. Make sure all technical words, discussions, and decisions are accurately captured.
 
 ## 🎯 Key Decisions
 List all key decisions, agreements, or conclusions made during the session as bullet points.
@@ -579,7 +607,7 @@ A concise 2-3 sentence overview of the huddle/meeting.`;
 /**
  * Transcribes an individual 3-5 minute audio chunk
  */
-async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName }) {
+async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, chunkIndex, totalChunks, startTime, endTime, roomName, participantNames }) {
   const activeKey = (apiKey || DEFAULT_GEMINI_KEY || '').trim();
   if (!activeKey) {
     throw new Error('Gemini API Key is missing. Please enter your API key in Settings.');
@@ -588,14 +616,19 @@ async function handleGeminiChunkTranscription({ apiKey, base64Audio, mimeType, c
     return { chunkIndex, transcript: '' };
   }
 
+  const participantList = Array.isArray(participantNames) && participantNames.length > 0
+    ? `\nMeeting Participants (use these actual names instead of "Speaker N"):\n${participantNames.map((n, i) => `- ${n}${i === 0 ? ' (local user / recorder)' : ''}`).join('\n')}\n`
+    : '';
+
   const promptText = `You are a high-accuracy professional meeting transcriber.
 This is Audio Segment #${chunkIndex + 1} (Time window: ${startTime || '00:00'} - ${endTime || '00:00'}) for meeting room "${roomName || 'Meeting'}".
-
+${participantList}
 IMPORTANT INSTRUCTIONS:
 - Transcribe ALL speech in this audio, including quiet, fast, or accented speech.
 - Include every word spoken, even if audio quality is imperfect.
-- Format each line as: [MM:SS] Speaker: "spoken words"
-- If multiple people speak, identify them as Speaker 1, Speaker 2, etc.
+- Format each line as: [MM:SS] Name: "spoken words"
+- If participant names were listed above, attribute speech to those names by matching voice characteristics, context, or speaking patterns. If you cannot confidently identify the speaker, use Speaker 1, Speaker 2, etc.
+- If multiple people speak and names are not provided, identify them as Speaker 1, Speaker 2, etc. consistently.
 - If the audio contains no speech at all (complete silence), respond with exactly: [SILENCE]
 - Do NOT say the audio is empty if you can detect ANY speech.
 - Do NOT add conversational intro, outro, or commentary.`;

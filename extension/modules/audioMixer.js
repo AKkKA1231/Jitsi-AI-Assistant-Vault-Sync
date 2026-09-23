@@ -125,6 +125,97 @@
   }
 
   /**
+   * Scrapes the display names of all visible participants from Jitsi Meet or Google Meet DOM.
+   * Returns an array of strings: first entry is always the local user (if resolvable), then remotes.
+   * These names are passed to Gemini so it can label transcripts with real names instead of "Speaker N".
+   */
+  function getParticipantNames() {
+    const names = new Set();
+    let localName = '';
+
+    try {
+      // ── Jitsi Meet ────────────────────────────────────────────────────────────
+      // Local display name via Jitsi JS API (most reliable)
+      if (typeof window !== 'undefined' && window.APP) {
+        try {
+          if (window.APP.conference && typeof window.APP.conference.getLocalDisplayName === 'function') {
+            const n = window.APP.conference.getLocalDisplayName();
+            if (n && n.trim()) localName = n.trim();
+          } else if (window.APP.settings && typeof window.APP.settings.getDisplayName === 'function') {
+            const n = window.APP.settings.getDisplayName();
+            if (n && n.trim()) localName = n.trim();
+          }
+        } catch (e) {}
+      }
+
+      // Jitsi remote participant tiles: .displayname inside remote containers
+      const jitsiRemote = document.querySelectorAll(
+        '[id^="participant_"] .displayname, ' +
+        '.remote-videos__container .displayname, ' +
+        '.filmstrip__videos .displayname, ' +
+        '.filmstrip--horizontal .displayname, ' +
+        '.remote-thumbnail .displayname'
+      );
+      jitsiRemote.forEach(el => {
+        const t = (el.textContent || el.innerText || '').trim();
+        if (t && t !== localName) names.add(t);
+      });
+
+      // Jitsi: local tile label (fallback if API unavailable)
+      if (!localName) {
+        const localTile = document.querySelector(
+          '#localVideoContainer .displayname, ' +
+          '[id="localVideoWrapper"] .displayname, ' +
+          '.local-video__container .displayname'
+        );
+        if (localTile) localName = (localTile.textContent || '').trim();
+      }
+    } catch (e) {}
+
+    try {
+      // ── Google Meet ───────────────────────────────────────────────────────────
+      // Local user: bottom bar self-view label or self-tile name
+      if (!localName) {
+        const selfView = document.querySelector(
+          '[data-self-name], ' +
+          '.IooIbb[data-self-name], ' +       // Self-name chip
+          '.pjlEX .zWGUib, ' +               // Self video tile label
+          '[data-self-video] .zWGUib'
+        );
+        if (selfView) {
+          localName = (selfView.getAttribute('data-self-name') || selfView.textContent || '').trim();
+        }
+      }
+
+      // Google Meet remote participant name chips in video tiles
+      const meetTiles = document.querySelectorAll(
+        '[data-participant-id] .zWGUib, ' +
+        '.RpC8Ef .zWGUib, ' +
+        '.NZp2ef .zWGUib, ' +
+        '[jsname="tJHJj"] .zWGUib'
+      );
+      meetTiles.forEach(el => {
+        const t = (el.textContent || '').trim();
+        if (t && t !== localName && t !== 'You' && t.length > 1) names.add(t);
+      });
+    } catch (e) {}
+
+    // Build ordered list: local user first, then remote participants
+    const result = [];
+    if (localName && localName !== 'Fellow Jitser' && localName !== 'me') {
+      result.push(localName);
+    }
+    names.forEach(n => {
+      if (n !== localName) result.push(n);
+    });
+
+    if (result.length > 0) {
+      console.log('[Audio Mixer] Resolved participant names:', result);
+    }
+    return result;
+  }
+
+  /**
    * Synchronizes local microphone capture with meeting mute status.
    * If mic is off, gain is set to 0 and tracks are silenced immediately.
    * When user unmutes, gain is restored to 1 and tracks are enabled.
@@ -169,7 +260,8 @@
     }
   }
 
-  async function initAudioMixer(sidebarElement) {
+  async function initAudioMixer(sidebarElement, options) {
+    const tabStreamId = options && options.tabStreamId ? options.tabStreamId : null;
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) {
       throw new Error('AudioContext is not supported in this browser.');
@@ -209,14 +301,43 @@
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
 
-    // 2. Discover Remote Participant Audio immediately
-    connectRemoteAudioElements();
+    // 2a. Try tabCapture stream first (bypasses cross-origin iframe restrictions)
+    //     tabStreamId is obtained by background.js via chrome.tabCapture.getMediaStreamId()
+    //     and passed in via content.js. This captures ALL tab audio (all remote participants)
+    //     regardless of how Jitsi/Meet embeds their peer connections.
+    let tabCaptureConnected = false;
+    if (tabStreamId) {
+      try {
+        const tabStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'tab',
+              chromeMediaSourceId: tabStreamId
+            }
+          },
+          video: false
+        });
+        const tabSource = audioCtx.createMediaStreamSource(tabStream);
+        tabSource.connect(analyser);
+        tabCaptureConnected = true;
+        console.log('[Audio Mixer] ✅ Tab audio stream connected via tabCapture. All remote participants captured regardless of iframe origin.');
+      } catch (tabErr) {
+        console.warn('[Audio Mixer] tabCapture stream failed — falling back to DOM audio element polling:', tabErr.message);
+      }
+    }
 
-    // 3. Periodic participant check every 2.5 seconds (0% CPU impact, no DOM recursion, robust multi-participant pickup)
-    if (remotePollInterval) clearInterval(remotePollInterval);
-    remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
+    // 2b. DOM-based remote audio fallback (original approach)
+    //     Used when tabCapture is unavailable or failed.
+    //     Works when remote audio elements are in the top-level document.
+    if (!tabCaptureConnected) {
+      connectRemoteAudioElements();
 
-    // 4. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
+      // Periodic participant check every 2.5 seconds
+      if (remotePollInterval) clearInterval(remotePollInterval);
+      remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
+    }
+
+    // 3. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
     if (typeof window !== 'undefined' && !hasAttachedWindowListeners) {
       hasAttachedWindowListeners = true;
       window.addEventListener('click', () => setTimeout(syncLocalMicState, 60));
@@ -392,6 +513,7 @@
   return {
     initAudioMixer,
     connectRemoteAudioElements,
+    getParticipantNames,
     initVAD,
     stopVAD,
     resetVADStats,

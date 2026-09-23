@@ -305,6 +305,8 @@
   let liveCapturedTranscripts = [];
   let meetingRecordingStartTime = null;
 
+  let meetingParticipantNames = []; // Captured at recording start, passed to Gemini for speaker attribution
+
   function getEl(id) {
     return document.getElementById(id);
   }
@@ -495,8 +497,37 @@
       if (AudioMixer.setAutoMuteSync) {
         AudioMixer.setAutoMuteSync(savedMicMode !== 'always_record');
       }
-      const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'));
+      // Request tabCapture stream ID from background (bypasses cross-origin iframe audio restrictions)
+      // Falls back gracefully to DOM audio polling if tabCapture is unavailable.
+      let tabStreamId = null;
+      try {
+        const captureResp = await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ action: 'TAB_CAPTURE_STREAM_ID' }, (resp) => {
+            if (chrome.runtime.lastError) { resolve(null); return; }
+            resolve(resp);
+          });
+        });
+        if (captureResp && captureResp.success && captureResp.streamId) {
+          tabStreamId = captureResp.streamId;
+          console.log('[Recording] tabCapture stream ID obtained — remote audio will be captured from all participants.');
+        } else {
+          console.warn('[Recording] tabCapture unavailable, falling back to DOM audio:', captureResp && captureResp.error);
+        }
+      } catch (e) {
+        console.warn('[Recording] tabCapture request failed:', e.message);
+      }
+
+      const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'), { tabStreamId });
       AudioMixer.initVAD(() => Recorder.isCurrentlyRecording());
+
+      // Resolve participant names for speaker attribution in transcripts
+      // Small delay to allow meeting tiles to render before scraping names
+      await new Promise(r => setTimeout(r, 1200));
+      meetingParticipantNames = AudioMixer.getParticipantNames ? AudioMixer.getParticipantNames() : [];
+      if (meetingParticipantNames.length > 0) {
+        console.log('[Recording] Participant names for transcription:', meetingParticipantNames);
+        showToast(`👥 ${meetingParticipantNames.length} participant(s) detected: ${meetingParticipantNames.slice(0, 3).join(', ')}`);
+      }
 
       liveCapturedTranscripts = [];
       const tBox = getEl('jitsiTranscriptBox');
@@ -542,7 +573,8 @@
           Transcriber.transcribeSingleBlock(sealedBlock, {
             apiKey: activeKey,
             roomName: room,
-            liveTranscripts: liveCapturedTranscripts
+            liveTranscripts: liveCapturedTranscripts,
+            participantNames: meetingParticipantNames
           }).then((result) => {
             activeMeetingBlockTranscripts[sealedBlock.index] = result;
             if (result.isFailed) {
@@ -624,7 +656,8 @@
       const result = await Transcriber.transcribeSingleBlock(targetBlock, {
         apiKey: activeKey,
         roomName: room,
-        liveTranscripts: liveCapturedTranscripts
+        liveTranscripts: liveCapturedTranscripts,
+        participantNames: meetingParticipantNames
       });
 
       activeMeetingBlockTranscripts[blockIndex] = result;
@@ -718,6 +751,7 @@
         liveTranscripts: liveCapturedTranscripts,
         unifiedAudioBlob: compiledAudioBlob,
         forceRetry: forceRetry,
+        participantNames: meetingParticipantNames,
         onProgress: (pct, msg) => {
           const statusEl = getEl('jitsiUploadStatusText');
           if (statusEl) statusEl.textContent = msg;

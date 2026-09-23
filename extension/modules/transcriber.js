@@ -91,7 +91,7 @@
   /**
    * Preemptively transcribes a single 3-6 minute audio block in background
    */
-  async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [] } = {}) {
+  async function transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts = [], participantNames = [] } = {}) {
     if (!block || !block.blob) {
       return { index: block ? block.index : 0, startTime: '00:00', endTime: '00:00', durationSec: 0, transcript: '', isFailed: true };
     }
@@ -138,7 +138,8 @@
                 totalChunks: 1,
                 startTime: block.startTime,
                 endTime: block.endTime,
-                roomName: roomName || 'meeting'
+                roomName: roomName || 'meeting',
+                participantNames: participantNames || []
               }, (res) => {
                 if (chrome.runtime.lastError) {
                   reject(new Error(chrome.runtime.lastError.message));
@@ -262,6 +263,7 @@
     unifiedAudioBlob = null,
     forceRetry = false,
     onProgress,
+    participantNames = [],
     onSynthesisError    // Optional: callback(errMsg) fired if AI executive summary fails
   } = {}) {
     if (!blocks || blocks.length === 0) {
@@ -285,7 +287,7 @@
     if (pendingBlocks.length > 0) {
       if (onProgress) onProgress(20, `Transcribing ${pendingBlocks.length} pending meeting block(s)...`);
       await runConcurrentPool(pendingBlocks, 2, async (block) => {
-        const res = await transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts });
+        const res = await transcribeSingleBlock(block, { apiKey, roomName, liveTranscripts, participantNames });
         precomputedTranscripts[block.index] = res;
       });
     }
