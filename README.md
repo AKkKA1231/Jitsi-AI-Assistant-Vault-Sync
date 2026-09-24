@@ -12,18 +12,19 @@ A turnkey, zero-cost solution for **Jitsi Meet** calls featuring:
 
 ```
 jitsi-ai-assistant/
-├── index.html              # Main application shell with Jitsi viewport & AI sidebar
-├── README.md               # Documentation & quick start guide
-├── package.json            # Lightweight dev server scripts
-└── src/
-    ├── style.css           # Modern dark-mode styling with glassmorphism & responsive layout
-    ├── app.js              # Master application controller and event bus
-    └── services/
-        ├── jitsi.js        # Jitsi Meet External API integration
-        ├── transcription.js# Web Speech API streaming transcription engine
-        ├── aiNotes.js      # Real-time note extraction & post-meeting summary generator
-        ├── recorder.js     # MediaRecorder video & dual-track mixed audio recording
-        └── googleDrive.js  # Multi-account Google Drive quota manager & uploader
+├── docs/                       # Project documentation & setup guides
+│   ├── COLLEAGUE_SETUP_GUIDE.md # Complete colleague onboarding guide (MD & HTML)
+│   ├── EXTENSION_QUICKSTART.md # 3-minute extension quickstart guide (MD & HTML)
+│   └── GOOGLE_DRIVE_SETUP_GUIDE.md # Google Drive webhook & OAuth configuration guide
+├── extension/                  # Chrome / Edge / Brave Browser Extension source code
+│   ├── manifest.json           # Chrome Extension Manifest V3 configuration
+│   ├── background.js           # Background service worker & audio recorder controller
+│   ├── content.js              # Injectable floating AI sidebar & Web Speech STT engine
+│   └── modules/                # Dual-track audio mixer & Gemini AI processor
+├── index.html                  # Standalone web app shell with Jitsi viewport & AI sidebar
+├── README.md                   # Repository overview & quick start guide
+├── package.json                # Dev server scripts & dependencies
+└── src/                        # Standalone web app logic & services
 ```
 
 ---
