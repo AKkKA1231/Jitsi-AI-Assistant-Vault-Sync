@@ -17,6 +17,7 @@
   let mixerDest = null;
   let micStream = null;
   let micGainNode = null;
+  let tabStream = null;                 // Module-scoped so cleanupMixer() can stop it
   let isLocalMicMuted = false;
   let manualMicMuteOverride = false;
   let autoMuteSyncEnabled = true;
@@ -301,14 +302,22 @@
       console.warn('[Audio Mixer] Local mic permission denied or unavailable:', err);
     }
 
-    // 2a. Try tabCapture stream first (bypasses cross-origin iframe restrictions)
+    // 2a. Try tabCapture stream (bypasses cross-origin iframe restrictions).
     //     tabStreamId is obtained by background.js via chrome.tabCapture.getMediaStreamId()
     //     and passed in via content.js. This captures ALL tab audio (all remote participants)
     //     regardless of how Jitsi/Meet embeds their peer connections.
+    //
+    // ⚠️  IMPORTANT — Speaker Loopback:
+    //     chrome.tabCapture hijacks the tab's audio output: once getUserMedia with
+    //     chromeMediaSource:'tab' succeeds, Chrome stops sending that audio to the OS
+    //     speakers. Without an explicit loopback (tabSource → audioCtx.destination),
+    //     the recording user can no longer hear meeting participants.
+    //     We fix this by connecting the captured source to BOTH the recorder analyser
+    //     AND audioCtx.destination so the colleague keeps hearing the call.
     let tabCaptureConnected = false;
     if (tabStreamId) {
       try {
-        const tabStream = await navigator.mediaDevices.getUserMedia({
+        tabStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             mandatory: {
               chromeMediaSource: 'tab',
@@ -318,24 +327,22 @@
           video: false
         });
         const tabSource = audioCtx.createMediaStreamSource(tabStream);
-        tabSource.connect(analyser);
+        tabSource.connect(analyser);               // → recording pipeline
+        tabSource.connect(audioCtx.destination);   // → speaker loopback (colleague can still hear!)
         tabCaptureConnected = true;
-        console.log('[Audio Mixer] ✅ Tab audio stream connected via tabCapture. All remote participants captured regardless of iframe origin.');
+        console.log('[Audio Mixer] ✅ Tab audio stream connected via tabCapture with speaker loopback. All remote participants captured and audible.');
       } catch (tabErr) {
         console.warn('[Audio Mixer] tabCapture stream failed — falling back to DOM audio element polling:', tabErr.message);
       }
     }
 
-    // 2b. DOM-based remote audio fallback (original approach)
-    //     Used when tabCapture is unavailable or failed.
-    //     Works when remote audio elements are in the top-level document.
-    if (!tabCaptureConnected) {
-      connectRemoteAudioElements();
-
-      // Periodic participant check every 2.5 seconds
-      if (remotePollInterval) clearInterval(remotePollInterval);
-      remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
-    }
+    // 2b. DOM-based remote audio polling — always runs, even when tabCapture succeeded.
+    //     tabCapture covers cross-origin iframes; DOM polling captures same-origin audio
+    //     elements as a belt-and-suspenders supplement. Duplicate stream IDs are already
+    //     deduplicated by connectedStreamIds, so there is no risk of double-recording.
+    connectRemoteAudioElements();
+    if (remotePollInterval) clearInterval(remotePollInterval);
+    remotePollInterval = setInterval(connectRemoteAudioElements, 2500);
 
     // 3. Listen for user mic toggle clicks / shortcuts (Ctrl+D for Google Meet, M for Jitsi)
     if (typeof window !== 'undefined' && !hasAttachedWindowListeners) {
@@ -505,6 +512,12 @@
     if (micStream) {
       micStream.getTracks().forEach(t => t.stop());
       micStream = null;
+    }
+    // Stop tabCapture stream tracks so Chrome restores speaker output after recording ends.
+    // Without this the tab audio hijack persists and the speaker stays muted indefinitely.
+    if (tabStream) {
+      tabStream.getTracks().forEach(t => t.stop());
+      tabStream = null;
     }
     connectedAudioElements.clear();
     connectedStreamIds.clear();
