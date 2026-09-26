@@ -332,7 +332,7 @@
         tabCaptureConnected = true;
         console.log('[Audio Mixer] ✅ Tab audio stream connected via tabCapture with speaker loopback. All remote participants captured and audible.');
       } catch (tabErr) {
-        console.warn('[Audio Mixer] tabCapture stream failed — falling back to DOM audio element polling:', tabErr.message);
+        console.info('[Audio Mixer] tabCapture stream notice — using DOM audio element polling:', tabErr.message);
       }
     }
 
@@ -395,7 +395,7 @@
         console.log('[Audio Mixer] Connected remote participant stream:', srcObj.id);
       } catch (e) {
         // Track might be dead or restricted
-        console.warn('[Audio Mixer] Remote audio connect notice:', e.message);
+        console.info('[Audio Mixer] Remote audio connect notice:', e.message);
       }
     });
 

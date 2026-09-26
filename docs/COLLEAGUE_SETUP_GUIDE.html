@@ -9,6 +9,7 @@
       --primary: #4f46e5;
       --primary-hover: #4338ca;
       --success: #10b981;
+      --warning: #f59e0b;
       --bg: #0f172a;
       --card-bg: #1e293b;
       --border: #334155;
@@ -29,7 +30,7 @@
       padding: 40px 20px;
     }
     .container {
-      max-width: 860px;
+      max-width: 900px;
       margin: 0 auto;
       background: var(--card-bg);
       border-radius: 16px;
@@ -59,7 +60,32 @@
     p.subtitle {
       color: var(--text-muted);
       font-size: 15px;
-      margin-bottom: 28px;
+      margin-bottom: 24px;
+    }
+    .alert-banner {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    .alert-banner .icon {
+      font-size: 24px;
+      line-height: 1;
+    }
+    .alert-banner strong {
+      color: #34d399;
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+    .alert-banner p {
+      color: #d1fae5;
+      font-size: 13.5px;
+      margin: 0;
     }
     .step-card {
       background: rgba(15, 23, 42, 0.6);
@@ -135,11 +161,14 @@
       border: 1px solid var(--border);
       padding: 10px 14px;
       text-align: left;
-      font-size: 14px;
+      font-size: 13.5px;
     }
     .tip-table th {
       background: #0f172a;
       color: #f1f5f9;
+    }
+    .tip-table td {
+      color: #cbd5e1;
     }
     .actions {
       display: flex;
@@ -207,9 +236,62 @@
 </head>
 <body>
   <div class="container">
-    <span class="badge">Team Onboarding Guide</span>
+    <span class="badge">Team Onboarding & Setup</span>
     <h1>🎙️ Meetings_AI Assistant & Vault Sync</h1>
     <p class="subtitle">Run your own meeting copilot in Chrome, Edge, or Brave in under 3 minutes.</p>
+
+    <!-- NO LOCAL SERVER CALLOUT -->
+    <div class="alert-banner">
+      <div class="icon">🚀</div>
+      <div>
+        <strong>No Local Server or Node.js Required!</strong>
+        <p>This extension is 100% client-side. You do not need to run terminal commands, npm install, or any backend server. Just download the files, load into your browser, and start meeting!</p>
+      </div>
+    </div>
+
+    <!-- PERMISSIONS SECTION -->
+    <div class="step-card">
+      <div class="step-title">
+        <div class="step-num">🔑</div>
+        <span>Required Permissions Checklist</span>
+      </div>
+      <table class="tip-table">
+        <thead>
+          <tr>
+            <th>Permission</th>
+            <th>Type</th>
+            <th>Why it is needed</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>🎙️ Microphone</strong></td>
+            <td>Browser Prompt</td>
+            <td>Captures your local microphone audio for speech-to-text transcription.</td>
+          </tr>
+          <tr>
+            <td><strong>🔊 Speaker Audio</strong></td>
+            <td>In-Tab Audio</td>
+            <td>Captures remote participants' voices via DOM audio element mixing.</td>
+          </tr>
+          <tr>
+            <td><strong>💾 Storage</strong></td>
+            <td>Extension Manifest</td>
+            <td>Securely stores your Gemini API key and settings in your browser's private local storage.</td>
+          </tr>
+          <tr>
+            <td><strong>📌 Tab Capture & Alarms</strong></td>
+            <td>Extension Manifest</td>
+            <td>Captures tab audio and triggers 3-minute crash recovery checkpoints into IndexedDB.</td>
+          </tr>
+          <tr>
+            <td><strong>🌐 Host Permissions</strong></td>
+            <td>Extension Manifest</td>
+            <td>Runs on <code>meet.jit.si</code> / Google Meet and connects to Google Gemini API & Google Drive.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- STEP 1 -->
     <div class="step-card">
@@ -220,7 +302,7 @@
       <ol>
         <li>Download the project folder or clone from GitHub:
           <pre>git clone https://github.com/AKkKA1231/Jitsi-AI-Assistant-Vault-Sync.git</pre>
-          <em>(Or download the ZIP file and extract it anywhere on your machine).</em>
+          <em>(Or download the ZIP from GitHub: click <strong>Code</strong> → <strong>Download ZIP</strong>, and extract anywhere).</em>
         </li>
         <li>Notice the <code>extension/</code> folder inside — that is your ready-to-use browser plugin!</li>
       </ol>
@@ -253,16 +335,16 @@
     <div class="step-card">
       <div class="step-title">
         <div class="step-num">3</div>
-        <span>Enter Free Gemini API Key (Saved Automatically)</span>
+        <span>Enter Free Gemini API Key (Auto-Saved)</span>
       </div>
       <ol>
-        <li>Grab a free key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);">Google AI Studio</a> (takes 30 seconds).</li>
-        <li>Click the puzzle icon in your browser to open the extension popup (or open any Jitsi call).</li>
+        <li>Grab a free API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--accent);">Google AI Studio</a> (takes 30 seconds).</li>
+        <li>Click the puzzle icon in your browser toolbar to open the extension popup (or open any Jitsi/Meet call).</li>
         <li>Go to the <strong>Settings</strong> tab (⚙️ gear icon).</li>
         <li>Paste your API key into <strong>Gemini API Key</strong> and click <strong>Save Settings</strong>.</li>
       </ol>
       <div class="callout">
-        🔒 <strong>Private & Secure:</strong> Your key is saved locally in your browser's encrypted storage and is never uploaded anywhere.
+        🔒 <strong>Private & Secure:</strong> Your key is saved locally in your own browser's storage and is never sent to any third-party server.
       </div>
     </div>
 
@@ -274,75 +356,19 @@
       </div>
       <p style="color:#cbd5e1; margin-bottom: 10px;">To have notes and audio recordings automatically uploaded to a dedicated folder in your personal Google Drive:</p>
       <ol>
-        <li>Open <a href="https://script.new" target="_blank" style="color:var(--accent);">script.new</a> in your browser and replace with this script:</li>
-      </ol>
-      <pre>function doPost(e) {
-  try {
-    var data = JSON.parse(e.postData.contents);
-    var subFolder;
-    if (data.targetFolderId) {
-      try {
-        subFolder = DriveApp.getFolderById(data.targetFolderId);
-      } catch (fErr) {}
-    }
-    
-    if (!subFolder) {
-      var mainFolder = DriveApp.getFoldersByName(data.folderName || "meetingRecords");
-      var parentFolder = mainFolder.hasNext() ? mainFolder.next() : DriveApp.createFolder(data.folderName || "meetingRecords");
-      var room = data.roomName || "Meeting";
-      var dateStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "GMT", "yyyy-MM-dd_HH-mm");
-      var subFolder = parentFolder.createFolder(room + "_" + dateStr);
-      try {
-        subFolder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      } catch (shareErr) {}
-    }
-    
-    // 1. Save Meeting Summary & Action Items (.md) if provided
-    var mdUrl = null;
-    if (data.markdownText) {
-      var mdText = data.markdownText || data.fileContent || "# Meeting Summary\n\nAudio attached.";
-      var mdFile = subFolder.createFile(data.markdownFileName || data.fileName || "Meeting_Summary.md", mdText, "text/markdown");
-      mdUrl = mdFile.getUrl();
-    }
-    
-    // 2. Save Audio Recording (.webm) if provided
-    var audioUrl = null;
-    var audioBase64 = data.audioBase64 || data.base64Audio;
-    if (audioBase64 && audioBase64.length > 0) {
-      try {
-        var audioBytes = Utilities.base64Decode(audioBase64);
-        var audioBlob = Utilities.newBlob(audioBytes, data.audioMimeType || "audio/webm", data.audioFileName || "Meeting_Audio.webm");
-        var audioFile = subFolder.createFile(audioBlob);
-        audioUrl = audioFile.getUrl();
-      } catch (audioErr) {
-        subFolder.createFile("Audio_Upload_Notice.txt", "Audio payload exceeded Google Apps Script memory limit. Please download audio locally from the extension drawer.\n\nNotice: " + audioErr.toString());
-      }
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      status: "success",
-      folderId: subFolder.getId(),
-      folderUrl: subFolder.getUrl(),
-      notesUrl: mdUrl,
-      audioUrl: audioUrl
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      status: "error",
-      error: err.toString(),
-      message: err.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
-  }
-}</pre>
-      <ol start="2">
-        <li>Click <strong>Deploy</strong> → <strong>New deployment</strong> → Select <strong>Web app</strong> (Execute as: <em>Me</em>, Who has access: <em>Anyone</em>).</li>
-        <li>Click <strong>Deploy</strong> (if Google displays <em>"Google hasn't verified this app"</em>, click <strong>Advanced</strong> → <strong>Go to Untitled project (unsafe)</strong> → <strong>Allow</strong>).</li>
-        <li>Copy the <strong>Web App URL</strong> and paste it into the plugin's <strong>Settings</strong> tab under <strong>Google Apps Script Webhook URL</strong>.</li>
+        <li>Open <a href="https://script.new" target="_blank" style="color:var(--accent);">script.new</a> in your browser.</li>
+        <li>Copy the Google Apps Script snippet from <a href="GOOGLE_DRIVE_SETUP_GUIDE.md" style="color:var(--accent);">GOOGLE_DRIVE_SETUP_GUIDE.md</a> and paste it into the editor.</li>
+        <li>Click <strong>Deploy</strong> → <strong>New deployment</strong> → Select <strong>Web app</strong>:
+          <ul>
+            <li><strong>Execute as:</strong> <em>Me</em></li>
+            <li><strong>Who has access:</strong> <em>Anyone</em> (Required)</li>
+          </ul>
+        </li>
+        <li>Click <strong>Deploy</strong>, authorize access (click <em>Advanced</em> → <em>Go to Untitled project (unsafe)</em> → <em>Allow</em>).</li>
+        <li>Copy your <strong>Web App URL</strong> and paste it into the plugin's <strong>Settings</strong> tab under <strong>Google Apps Script Webhook URL</strong>.</li>
       </ol>
       <div class="callout">
-        💡 <em>Don't want to set up Google Drive? No problem! The plugin will simply download the clean Markdown summary and recording directly to your computer when you click Upload.</em>
+        💡 <em>If you skip this step, clicking "Upload to Drive" will simply download the clean Word document (.docx) / Markdown notes and audio file directly to your computer!</em>
       </div>
     </div>
 
@@ -353,38 +379,11 @@
         <span>Joining a Meeting</span>
       </div>
       <ol>
-        <li>Join any meeting at <a href="https://meet.jit.si" target="_blank" style="color:var(--accent);">meet.jit.si</a>.</li>
-        <li>Click the floating <strong>AI Assistant</strong> button on the right edge.</li>
+        <li>Join any meeting at <a href="https://meet.jit.si" target="_blank" style="color:var(--accent);">meet.jit.si</a> or Google Meet.</li>
+        <li>Click the floating <strong>✨ AI Assistant</strong> button on the right edge.</li>
         <li>Click <strong>"Start Recording"</strong> and grant mic permissions.</li>
-        <li>View live transcriptions and AI action items. When done, click <strong>"Stop"</strong> and <strong>"Upload to Drive"</strong>!</li>
+        <li>View live transcriptions and AI action items. When done, click <strong>"Stop"</strong> and <strong>"Upload to Drive"</strong> or <strong>"Share to Slack"</strong>!</li>
       </ol>
-
-      <table class="tip-table">
-        <thead>
-          <tr>
-            <th>Control</th>
-            <th>What it does</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><strong>Drag to Reposition</strong></td>
-            <td>Click and drag the floating AI button up or down along the edge so it never blocks your call controls.</td>
-          </tr>
-          <tr>
-            <td><strong>Minimize Button (–)</strong></td>
-            <td>Click the small minus symbol to collapse the toggle into an unobtrusive circular badge.</td>
-          </tr>
-          <tr>
-            <td><strong>Auto-Hide</strong></td>
-            <td>When the sidebar opens, the floating button automatically disappears off-screen.</td>
-          </tr>
-          <tr>
-            <td><strong>Crash Recovery</strong></td>
-            <td>Accidentally close the tab? Re-open the room and your transcript is instantly restored from IndexedDB!</td>
-          </tr>
-        </tbody>
-      </table>
     </div>
 
     <div class="actions">

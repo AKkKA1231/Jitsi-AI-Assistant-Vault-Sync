@@ -433,8 +433,10 @@ it('Should calculate free quota accurately before upload', () => {
 console.log('\n--- Test Group 6: UI & Documentation Integrity ---');
 
 it('Should verify GOOGLE_DRIVE_SETUP_GUIDE.md exists and contains copy-paste Apps Script code', () => {
-  const guidePath = path.resolve('./GOOGLE_DRIVE_SETUP_GUIDE.md');
-  assert.ok(fs.existsSync(guidePath), 'GOOGLE_DRIVE_SETUP_GUIDE.md must exist in project root');
+  const guidePath = fs.existsSync(path.resolve('./docs/GOOGLE_DRIVE_SETUP_GUIDE.md'))
+    ? path.resolve('./docs/GOOGLE_DRIVE_SETUP_GUIDE.md')
+    : path.resolve('./GOOGLE_DRIVE_SETUP_GUIDE.md');
+  assert.ok(fs.existsSync(guidePath), 'GOOGLE_DRIVE_SETUP_GUIDE.md must exist in docs/ or project root');
   const guideText = fs.readFileSync(guidePath, 'utf-8');
 
   assert.ok(guideText.includes('function doPost(e)'), 'Guide must contain doPost(e) Google Apps Script snippet');

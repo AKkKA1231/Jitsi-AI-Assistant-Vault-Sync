@@ -152,14 +152,17 @@ async function handleDriveWebhookUpload({ webhookUrl, payload }) {
 
   // Streamline payload to avoid memory bloat
   const cleanPayload = {
+    action: payload.action || '',
     folderName: payload.folderName || 'meetingRecords',
     roomName: payload.roomName || 'Meeting',
     targetFolderId: payload.targetFolderId || '',
     audioFileName: payload.audioFileName || 'Meeting_Audio.webm',
     audioMimeType: payload.audioMimeType || 'audio/webm',
+    audioSizeBytes: payload.audioSizeBytes || 0,
     audioBase64: payload.audioBase64 || payload.base64Audio || '',
     markdownFileName: payload.markdownFileName || payload.fileName || 'Meeting_Summary.md',
-    markdownText: payload.markdownText || payload.fileContent || ''
+    markdownText: payload.markdownText || payload.fileContent || '',
+    generateDocx: payload.generateDocx !== undefined ? payload.generateDocx : true
   };
 
   const controller = new AbortController();

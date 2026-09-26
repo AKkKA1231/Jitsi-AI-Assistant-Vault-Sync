@@ -640,10 +640,10 @@
           audioUrl = driveData.webViewLink || (driveData.id ? `https://drive.google.com/file/d/${driveData.id}/view` : null);
           console.log('[Drive Uploader] Direct resumable audio upload succeeded:', audioUrl);
         } else {
-          console.warn(`[Drive Uploader] Direct upload returned status ${putRes.status}, falling back to Webhook attach...`);
+          console.info(`[Drive Uploader] Direct upload returned status ${putRes.status}, falling back to Webhook attach...`);
         }
       } catch (streamErr) {
-        console.warn('[Drive Uploader] Direct resumable upload notice:', streamErr);
+        console.info('[Drive Uploader] Direct resumable upload notice:', streamErr.message || streamErr);
       }
     }
 
@@ -670,7 +670,7 @@
           audioUrl = audioResult.audioUrl;
         }
       } catch (attachErr) {
-        console.warn('[Drive Uploader] Webhook audio attach notice:', attachErr);
+        console.info('[Drive Uploader] Webhook audio attach notice:', attachErr.message || attachErr);
       }
     }
 

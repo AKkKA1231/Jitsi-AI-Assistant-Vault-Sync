@@ -511,10 +511,10 @@
           tabStreamId = captureResp.streamId;
           console.log('[Recording] tabCapture stream ID obtained — remote audio will be captured from all participants.');
         } else {
-          console.warn('[Recording] tabCapture unavailable, falling back to DOM audio:', captureResp && captureResp.error);
+          console.info('[Recording] tabCapture unavailable, falling back to DOM audio:', (captureResp && captureResp.error) || 'using DOM audio polling');
         }
       } catch (e) {
-        console.warn('[Recording] tabCapture request failed:', e.message);
+        console.info('[Recording] tabCapture notice, falling back to DOM audio:', e.message);
       }
 
       const mixedStream = await AudioMixer.initAudioMixer(getEl('jitsiAiSidebar'), { tabStreamId });
@@ -720,7 +720,7 @@
    */
   async function executeParallelTranscription({ forceRetry = false } = {}) {
     if (isTranscribing) {
-      console.warn('[Transcription] Already in progress — skipping duplicate call.');
+      console.log('[Transcription] Already in progress — skipping duplicate call.');
       return;
     }
     isTranscribing = true;
